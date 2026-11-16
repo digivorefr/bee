@@ -11,6 +11,7 @@ import SwiftUI
 ///     select:<request name>      collection:<name>   folder:<name>   environment:<name>
 ///     globals   history   none   activate:<environment name>
 ///     send                       wait:<seconds>
+///     url:<address>              begin (sends without waiting for the response)
 ///     add:<request section>      open:<request section>     close:<request section>
 ///     ropen:<response section>   rclose:<response section>
 ///     layout:beside|below        appearance:light|dark      size:<width>x<height>
@@ -76,6 +77,11 @@ enum DebugHarness {
             while session.isSending, Date() < deadline {
                 try? await Task.sleep(for: .milliseconds(100))
             }
+        case "url":
+            currentSession(model)?.item.url = argument
+        case "begin":
+            guard let session = currentSession(model) else { return log("begin: no request selected") }
+            model.send(session)
         case "wait":
             try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
         case "add":

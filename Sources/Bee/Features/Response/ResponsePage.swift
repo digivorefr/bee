@@ -15,6 +15,14 @@ struct ResponsePageView: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .topLeading)
             }
         }
+        // Until a response is on the page, the comb waits in its far corner; honey flows through
+        // it while the request is in flight.
+        .background(alignment: .bottomTrailing) {
+            if session.isSending || session.outcome == nil {
+                CombField(flowingSince: session.isSending ? session.sendStartedAt ?? Date() : nil)
+            }
+        }
+        .clipped()
     }
 
     @ViewBuilder private var page: some View {
@@ -105,9 +113,7 @@ private struct SendingStatusLine: View {
             }
             GridRow(alignment: .center) {
                 HStack(spacing: Theme.Space.s) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityHidden(true)
+                    CombSpinner()
                     Text("Sending…")
                         .font(Theme.text(Theme.Size.headline, weight: .semibold))
                         .foregroundStyle(Theme.inkSecondary)
@@ -279,9 +285,8 @@ private struct FailureHeadline: View {
             let copy = FailureCopy(message: outcome.errorMessage, hasOwnPreRequestScript: session.has(.preRequestScript))
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(Theme.text(Theme.Size.headline))
-                        .foregroundStyle(Theme.negative)
+                    CellMark("xmark", color: Theme.negative, size: Theme.Size.headline)
+                        .accessibilityHidden(false)
                         .accessibilityLabel("Failed")
                     Text(copy.headline)
                         .font(Theme.text(Theme.Size.headline, weight: .semibold))

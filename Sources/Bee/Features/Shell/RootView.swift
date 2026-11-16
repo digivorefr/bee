@@ -175,5 +175,7 @@ struct EmptyDetailView: View {
         }
         .padding(Theme.Layout.pageInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(alignment: .bottomTrailing) { CombField() }
+        .clipped()
     }
 }

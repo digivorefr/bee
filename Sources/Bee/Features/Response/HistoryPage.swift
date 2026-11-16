@@ -155,9 +155,7 @@ private struct HistoryRow: View {
         } else {
             let message = entry.errorMessage ?? "No response"
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(Theme.text(Theme.Size.caption))
-                    .accessibilityHidden(true)
+                CellMark("xmark", color: Theme.negative, size: Theme.Size.caption)
                 Text(message)
                     .font(Theme.text())
                     .lineLimit(1)

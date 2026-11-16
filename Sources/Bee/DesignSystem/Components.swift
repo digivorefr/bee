@@ -259,9 +259,7 @@ struct StatusMark: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.xs + 2) {
-            Image(systemName: glyph)
-                .font(.system(size: size, weight: .semibold))
-                .accessibilityHidden(true)
+            CellMark(glyph, color: Theme.statusColor(code), size: size)
             Text("\(code) \(reason)")
                 .font(Theme.mono(size, weight: .semibold))
                 .lineLimit(1)
@@ -274,9 +272,10 @@ struct StatusMark: View {
     /// The family is told by the glyph as well as the color.
     private var glyph: String {
         switch code {
-        case 100..<300: "checkmark.circle.fill"
-        case 300..<400: "arrow.right.circle.fill"
-        default: "xmark.circle.fill"
+        case 418: "cup.and.saucer.fill"
+        case 100..<300: "checkmark"
+        case 300..<400: "arrow.right"
+        default: "xmark"
         }
     }
 

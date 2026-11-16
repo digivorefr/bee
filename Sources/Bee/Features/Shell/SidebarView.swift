@@ -182,7 +182,7 @@ struct SidebarView: View {
         let selection = SidebarSelection.collection(collection.id)
         return SidebarRow(
             selection: selection, name: collection.name, depth: 0,
-            kind: .container(glyph: "tray", isExpanded: shell.isCollectionExpanded(collection.id)) {
+            kind: .container(glyph: "hexagon", isExpanded: shell.isCollectionExpanded(collection.id)) {
                 shell.toggle(collection.id)
             },
             rename: { name in
@@ -460,9 +460,8 @@ private struct SidebarRow: View {
 
     private var activeMark: some View {
         HStack(spacing: Theme.Space.xs) {
-            Image(systemName: "checkmark")
-                .font(Theme.text(Theme.Size.caption, weight: .semibold))
-                .imageScale(.small)
+            // A cell of honey: the environment requests are sent with.
+            CellMark(color: Theme.honey, size: Theme.Size.caption - 2)
             Text("Active")
                 .font(Theme.text(Theme.Size.caption))
         }

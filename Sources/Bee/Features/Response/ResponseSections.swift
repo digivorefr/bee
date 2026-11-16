@@ -67,9 +67,7 @@ private struct TestMark: View {
     let passed: Bool
 
     var body: some View {
-        Image(systemName: passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .foregroundStyle(passed ? Theme.positive : Theme.negative)
-            .accessibilityHidden(true)
+        CellMark(passed ? "checkmark" : "xmark", color: passed ? Theme.positive : Theme.negative)
     }
 }
 
