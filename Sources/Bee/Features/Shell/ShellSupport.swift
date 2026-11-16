@@ -33,8 +33,11 @@ enum ShellMetrics {
 final class ShellState {
     static let shared = ShellState()
 
-    /// The event monitor that turns a double-click on a sidebar row into a rename.
-    @ObservationIgnored var doubleClickMonitor: Any?
+    /// The event monitor that turns a double-click on a sidebar row into a rename, and a click
+    /// outside the name being edited into the end of that rename.
+    @ObservationIgnored var clickMonitor: Any?
+    /// Keeps the name being edited; set by the row while its field is open.
+    @ObservationIgnored var commitRename: (() -> Void)?
 
     enum PendingDelete: Identifiable, Equatable {
         case collection(id: UUID, name: String, requestCount: Int)
@@ -111,7 +114,10 @@ final class ShellState {
         renaming = selection
     }
 
-    func cancelRename() { renaming = nil }
+    func cancelRename() {
+        renaming = nil
+        commitRename = nil
+    }
 }
 
 // MARK: - Model conveniences

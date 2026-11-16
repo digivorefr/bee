@@ -53,8 +53,8 @@ struct SidebarView: View {
         // A double-click renames the row it lands on. The list consumes mouse-downs for selection,
         // so a SwiftUI double-tap gesture on a row never fires: the click count is read from the
         // event itself.
-        .onAppear { installDoubleClickMonitor() }
-        .onDisappear { removeDoubleClickMonitor() }
+        .onAppear { installClickMonitor() }
+        .onDisappear { removeClickMonitor() }
         .dropDestination(for: URL.self) { urls, _ in
             ShellActions.importFiles(urls, model: model)
         }
@@ -240,11 +240,20 @@ struct SidebarView: View {
         shell.beginRename(selection, name: name)
     }
 
-    private func installDoubleClickMonitor() {
-        guard shell.doubleClickMonitor == nil else { return }
-        shell.doubleClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
-            guard event.clickCount == 2, let frame = event.window?.contentView?.superview,
+    private func installClickMonitor() {
+        guard shell.clickMonitor == nil else { return }
+        shell.clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            guard let frame = event.window?.contentView?.superview,
                   let hit = frame.hitTest(event.locationInWindow) else { return event }
+            // A click anywhere but in the name being edited ends the rename and keeps what was typed
+            // (a click on bare paper does not take the focus away, so the field cannot tell by itself).
+            if shell.renaming != nil {
+                if let editor = event.window?.firstResponder as? NSText, hit.isDescendant(of: editor) {
+                    return event
+                }
+                shell.commitRename?()
+            }
+            guard event.clickCount == 2 else { return event }
             // Only rows of the sidebar's list count: walk up to its table view.
             var view: NSView? = hit
             while let current = view, !(current is NSTableView) { view = current.superview }
@@ -256,9 +265,9 @@ struct SidebarView: View {
         }
     }
 
-    private func removeDoubleClickMonitor() {
-        if let monitor = shell.doubleClickMonitor { NSEvent.removeMonitor(monitor) }
-        shell.doubleClickMonitor = nil
+    private func removeClickMonitor() {
+        if let monitor = shell.clickMonitor { NSEvent.removeMonitor(monitor) }
+        shell.clickMonitor = nil
     }
 
     private func beginRenameOfSelection() -> KeyPress.Result {
@@ -482,6 +491,7 @@ private struct SidebarRow: View {
             .onAppear {
                 renameStartedAt = Date()
                 isFieldFocused = true
+                shell.commitRename = { commit() }
             }
             // Focus set while the row appears can be dropped; ask again once it is on screen.
             .task { isFieldFocused = true }
@@ -500,7 +510,7 @@ private struct SidebarRow: View {
     private func commit() {
         guard shell.renaming == selection else { return }
         let text = shell.renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        shell.renaming = nil
+        shell.cancelRename()
         if !text.isEmpty, text != name { rename?(text) }
     }
 }

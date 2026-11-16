@@ -16,7 +16,7 @@ import SwiftUI
 ///     layout:beside|below        appearance:light|dark      size:<width>x<height>
 ///     snapshot:<png path>        sidebarshot:<png path>     quit
 ///     click:<x>,<y>   doubleclick:<x>,<y>   type:<text>   selectall   key:return|tab|escape|delete   focus
-///     cmd:<key>   windowshot:<png path>
+///     cmd:<key>   windowshot:<png path>   front
 ///
 /// Clicks and shortcuts reach SwiftUI controls only when the app is frontmost: start it with
 /// `open -n dist/Bee.app --env BEE_SCENARIO=… --env BEE_HARNESS_LOG=<file>`.
@@ -189,6 +189,12 @@ enum DebugHarness {
             // Snapshots whichever window is key (the Settings window, for instance).
             try? await Task.sleep(for: .milliseconds(350))
             snapshot(to: argument, window: NSApp.keyWindow)
+        case "front":
+            // Asks to become the frontmost application, so that clicks go through the event queue.
+            NSApp.activate(ignoringOtherApps: true)
+            mainWindow()?.makeKeyAndOrderFront(nil)
+            try? await Task.sleep(for: .milliseconds(500))
+            log("front: active \(NSApp.isActive) key \(mainWindow()?.isKeyWindow ?? false)")
         case "focus":
             let window = mainWindow()
             log("first responder: \(String(describing: window?.firstResponder)) key: \(window?.isKeyWindow ?? false) active: \(NSApp.isActive)")
