@@ -1,4 +1,4 @@
-Required Notice: Copyright 2026 digivorefr (https://github.com/digivorefr)
+Required Notice: Copyright 2026 Pierre Bonnin (https://github.com/digivorefr)
 
 # PolyForm Noncommercial License 1.0.0
 
