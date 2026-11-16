@@ -167,16 +167,54 @@ enum TokenStyler {
         [.font: Theme.nsMono(size), .foregroundColor: Theme.Palette.ink, .paragraphStyle: paragraph]
     }
 
-    /// Marks every `{{placeholder}}` of the storage as a token. With a context, an unknown name is drawn in
-    /// the warning color and a secret gets room for its lock. Tooltips never carry a secret's value.
+    /// Marks every `{{placeholder}}` of the storage as a token and, when `pathVariables` is given (the text is
+    /// an address), every `:name` segment too. With a context, a name without a value is drawn in the warning
+    /// color and a secret gets room for its lock. Tooltips never carry a secret's value.
     static func apply(
         to storage: NSTextStorage, context: VariableContext?, size: CGFloat,
-        paragraph: NSParagraphStyle = .default, toolTips: Bool
+        paragraph: NSParagraphStyle = .default, toolTips: Bool, pathVariables: [KeyValue]? = nil
     ) {
         let text = storage.string
-        guard text.contains("{{") else { return }
         let string = text as NSString
         let font = Theme.nsMono(size)
+
+        func mark(_ range: NSRange, isSecret: Bool, isUnresolved: Bool, toolTip: String?) {
+            var attributes: [NSAttributedString.Key: Any] = [
+                .beeToken: TokenMark(isSecret: isSecret),
+                .font: font,
+                .foregroundColor: isUnresolved ? Theme.Palette.warning : Theme.Palette.ink,
+            ]
+            if let toolTip { attributes[.toolTip] = toolTip }
+            storage.addAttributes(attributes, range: range)
+            guard isSecret else { return }
+            let paragraphRange = string.paragraphRange(for: NSRange(location: range.location, length: 0))
+            if range.location > paragraphRange.location {
+                let previous = string.rangeOfComposedCharacterSequence(at: range.location - 1)
+                storage.addAttribute(.kern, value: NSNumber(value: Double(WireMetrics.lockAdvance(size))), range: previous)
+            } else {
+                let indented = NSMutableParagraphStyle()
+                indented.setParagraphStyle(paragraph)
+                indented.firstLineHeadIndent = WireMetrics.lockAdvance(size)
+                storage.addAttribute(.paragraphStyle, value: indented, range: paragraphRange)
+            }
+        }
+
+        if let pathVariables {
+            for occurrence in PathVariables.occurrences(in: text) {
+                let row = pathVariables.first { $0.key == occurrence.name }
+                let template = PathVariables.valueTemplate(for: occurrence.name, in: pathVariables)
+                let value = context.map { TemplateEngine.render(template, in: $0) }
+                let holdsSecret = row.map { $0.isSecret && !$0.value.isEmpty && !RequestText.isPlaceholderOnly($0.value) } ?? false
+                let isSecret = holdsSecret || value?.usedSecret == true
+                let isUnresolved = value.map { !$0.unresolved.isEmpty } ?? false
+                mark(
+                    occurrence.nsRange, isSecret: isSecret, isUnresolved: isUnresolved,
+                    toolTip: toolTips ? value.map { pathToolTip(name: occurrence.name, value: $0, isSecret: isSecret) } : nil
+                )
+            }
+        }
+
+        guard text.contains("{{") else { return }
         for token in TemplateEngine.tokens(in: text) {
             let name: String
             let isDynamic: Bool
@@ -186,30 +224,22 @@ enum TokenStyler {
             case .dynamic(let dynamic): name = dynamic; isDynamic = true
             }
             let lookup = isDynamic ? nil : context?.lookup(name)
-            let isSecret = lookup?.isSecret ?? false
-            let isUnresolved = !isDynamic && context != nil && lookup == nil
-            var attributes: [NSAttributedString.Key: Any] = [
-                .beeToken: TokenMark(isSecret: isSecret),
-                .font: font,
-                .foregroundColor: isUnresolved ? Theme.Palette.warning : Theme.Palette.ink,
-            ]
-            if toolTips, context != nil {
-                attributes[.toolTip] = toolTip(lookup: lookup, isDynamic: isDynamic)
-            }
-            storage.addAttributes(attributes, range: token.nsRange)
-            guard isSecret else { continue }
-            let start = token.nsRange.location
-            let paragraphRange = string.paragraphRange(for: NSRange(location: start, length: 0))
-            if start > paragraphRange.location {
-                let previous = string.rangeOfComposedCharacterSequence(at: start - 1)
-                storage.addAttribute(.kern, value: NSNumber(value: Double(WireMetrics.lockAdvance(size))), range: previous)
-            } else {
-                let indented = NSMutableParagraphStyle()
-                indented.setParagraphStyle(paragraph)
-                indented.firstLineHeadIndent = WireMetrics.lockAdvance(size)
-                storage.addAttribute(.paragraphStyle, value: indented, range: paragraphRange)
-            }
+            mark(
+                token.nsRange, isSecret: lookup?.isSecret ?? false,
+                isUnresolved: !isDynamic && context != nil && lookup == nil,
+                toolTip: toolTips && context != nil ? toolTip(lookup: lookup, isDynamic: isDynamic) : nil
+            )
         }
+    }
+
+    private static func pathToolTip(name: String, value: RenderResult, isSecret: Bool) -> String {
+        if !value.unresolved.isEmpty {
+            return "Path variable without a value. Set it under Path variables, or add a variable named \(name)."
+        }
+        if isSecret { return "Path variable · Secret, hidden" }
+        let text = value.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return "Path variable · Empty" }
+        return "Path variable · \(text.count > 200 ? text.prefix(200) + "…" : text)"
     }
 
     private static func toolTip(lookup: VariableLookup?, isDynamic: Bool) -> String {

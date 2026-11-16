@@ -1,20 +1,23 @@
 #!/bin/bash
 # Builds dist/Bee.app from the Swift package (no Xcode required, Command Line Tools only).
-# Usage: Scripts/build-app.sh [--debug] [--open]
+# Usage: Scripts/build-app.sh [--debug] [--open] [--out <directory>]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="release"
 OPEN_AFTER=false
-for argument in "$@"; do
-    case "$argument" in
+OUT="$ROOT/dist"
+while [ $# -gt 0 ]; do
+    case "$1" in
         --debug) CONFIG="debug" ;;
         --open) OPEN_AFTER=true ;;
-        *) echo "Unknown option: $argument" >&2; exit 2 ;;
+        --out) shift; [ $# -gt 0 ] || { echo "--out needs a directory" >&2; exit 2; }; OUT="$1" ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
+    shift
 done
 
-APP="$ROOT/dist/Bee.app"
+APP="$OUT/Bee.app"
 VERSION="1.0.0"
 
 cd "$ROOT"

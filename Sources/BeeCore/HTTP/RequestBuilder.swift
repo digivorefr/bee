@@ -48,8 +48,8 @@ public enum RequestBuilder {
     ) throws(RequestBuildError) -> BuildOutput {
         var renderer = Renderer(context: context)
 
-        // Address
-        let renderedURL = renderer.render(item.url)
+        // Address, with each `:name` segment replaced by its value
+        let renderedURL = renderer.renderAddress(item.url, pathVariables: item.pathVariables)
         let address = renderedURL.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.isEmpty else { throw .emptyURL }
 
@@ -120,7 +120,14 @@ public enum RequestBuilder {
         init(context: VariableContext) { self.context = context }
 
         mutating func render(_ template: String) -> RenderResult {
-            let result = TemplateEngine.render(template, in: context)
+            record(TemplateEngine.render(template, in: context))
+        }
+
+        mutating func renderAddress(_ address: String, pathVariables: [KeyValue]) -> RenderResult {
+            record(PathVariables.render(address, rows: pathVariables, in: context))
+        }
+
+        private mutating func record(_ result: RenderResult) -> RenderResult {
             for name in result.unresolved where !unresolved.contains(name) { unresolved.append(name) }
             return result
         }

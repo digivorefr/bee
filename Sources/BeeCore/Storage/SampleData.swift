@@ -7,6 +7,7 @@ public enum SampleData {
         let httpbin = Environment(name: "httpbin", variables: [
             Variable(name: "baseUrl", value: "https://httpbin.org"),
             Variable(name: "userName", value: "bee"),
+            Variable(name: "ticketId", value: "42"),
             Variable(name: "apiToken", value: "demo-token-1234", isSecret: true),
             Variable(name: "accessToken", value: "", isSecret: true),
         ])
@@ -24,6 +25,7 @@ public enum SampleData {
             name: "Bee Basics",
             items: [
                 .request(getWithParameters()),
+                .request(getByPathVariable()),
                 .request(sendJSON()),
                 .request(sendSecretHeader()),
                 .folder(tokenFlow()),
@@ -51,6 +53,19 @@ public enum SampleData {
                 KeyValue(key: "page", value: "1"),
             ],
             notes: "Query parameters are edited as rows. {{userName}} is replaced by the environment value."
+        )
+    }
+
+    private static func getByPathVariable() -> RequestItem {
+        RequestItem(
+            name: "Get by path variable",
+            method: .get,
+            url: "{{baseUrl}}/anything/tickets/:ticketId/comments/:commentId",
+            pathVariables: [KeyValue(key: "commentId", value: "7")],
+            notes: """
+            A segment written :name is a path variable. commentId has its value under Path variables; \
+            ticketId has none, so it takes the ticketId variable of the environment.
+            """
         )
     }
 

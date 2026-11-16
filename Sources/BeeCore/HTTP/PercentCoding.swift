@@ -1,6 +1,6 @@
 import Foundation
 
-/// Percent-encoding for query strings and form bodies.
+/// Percent-encoding for query strings, path segments and form bodies.
 enum PercentCoding {
     private static let hex = Array("0123456789ABCDEF".utf8)
 
@@ -21,15 +21,27 @@ enum PercentCoding {
     }
 
     private static let queryAllowed = Set("-._~!$'()*,;:@/?".utf8)
+    private static let pathSegmentAllowed = Set("-._~!$&'()*+,;=:@".utf8)
     private static let formAllowed = Set("-._~*".utf8)
 
     /// Encodes a query key or value. Unreserved characters and `!$'()*,;:@/?` stay, a space becomes `%20`, `+ & = #`
     /// and everything else is encoded. An existing `%XX` triplet is kept, so a pasted address is not encoded twice.
     static func encodeQuery(_ text: String) -> String {
+        encode(text, allowed: queryAllowed)
+    }
+
+    /// Encodes a value that stands for one path segment. Unreserved characters and `!$&'()*+,;=:@` stay; `/ ? #`,
+    /// a space and everything else are encoded, so the value can never open another segment. An existing `%XX`
+    /// triplet is kept.
+    static func encodePathSegment(_ text: String) -> String {
+        encode(text, allowed: pathSegmentAllowed)
+    }
+
+    private static func encode(_ text: String, allowed: Set<UInt8>) -> String {
         let bytes = Array(text.utf8)
         var output: [UInt8] = []
         for (index, byte) in bytes.enumerated() {
-            if isAlphanumeric(byte) || queryAllowed.contains(byte) {
+            if isAlphanumeric(byte) || allowed.contains(byte) {
                 output.append(byte)
             } else if byte == 0x25, index + 2 < bytes.count, isHexDigit(bytes[index + 1]), isHexDigit(bytes[index + 2]) {
                 output.append(byte)

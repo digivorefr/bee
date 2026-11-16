@@ -11,24 +11,29 @@ struct TemplateField: View {
     private let context: VariableContext
     private let size: CGFloat
     private let isBordered: Bool
+    private let pathVariables: [KeyValue]?
     private let onSubmit: (() -> Void)?
     @ViewState private var isFocused = false
 
+    /// - Parameter pathVariables: for an address field, the request's path variable rows: the `:name`
+    ///   segments of the text then show as tokens too.
     init(
         _ placeholder: String, text: Binding<String>, context: VariableContext,
-        size: CGFloat = Theme.Size.body, isBordered: Bool = true, onSubmit: (() -> Void)? = nil
+        size: CGFloat = Theme.Size.body, isBordered: Bool = true, pathVariables: [KeyValue]? = nil,
+        onSubmit: (() -> Void)? = nil
     ) {
         self.placeholder = placeholder
         _text = text
         self.context = context
         self.size = size
         self.isBordered = isBordered
+        self.pathVariables = pathVariables
         self.onSubmit = onSubmit
     }
 
     var body: some View {
         let field = WireField(
-            placeholder: placeholder, text: $text, variables: context, size: size,
+            placeholder: placeholder, text: $text, variables: context, size: size, pathVariables: pathVariables,
             inset: isBordered ? NSSize(width: Theme.Space.s, height: Theme.Layout.fieldInset) : .zero,
             onSubmit: onSubmit, onFocusChange: { isFocused = $0 }
         )
@@ -50,6 +55,8 @@ struct WireField: NSViewRepresentable {
     @Binding var text: String
     let variables: VariableContext?
     let size: CGFloat
+    /// Set for an address: its `:name` segments are tokens whose values these rows hold.
+    var pathVariables: [KeyValue]?
     var inset: NSSize = .zero
     var focusOnAppear = false
     var onSubmit: (() -> Void)?
@@ -162,13 +169,17 @@ struct WireField: NSViewRepresentable {
             hasher.combine(storage.string)
             hasher.combine(parent.variables?.styleSignature)
             hasher.combine(parent.size)
+            hasher.combine(parent.pathVariables)
             let signature = hasher.finalize()
             guard signature != styledSignature else { return }
             styledSignature = signature
             let base = TokenStyler.base(size: parent.size)
             storage.beginEditing()
             storage.setAttributes(base, range: NSRange(location: 0, length: storage.length))
-            TokenStyler.apply(to: storage, context: parent.variables, size: parent.size, toolTips: true)
+            TokenStyler.apply(
+                to: storage, context: parent.variables, size: parent.size, toolTips: true,
+                pathVariables: parent.pathVariables
+            )
             storage.endEditing()
             textView.typingAttributes = base
         }

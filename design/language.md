@@ -11,7 +11,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 - **No tab rows, anywhere.** A request and a response are documents made of sections (disclosure rows). A closed section rests as one line summarising its content; an absent part is not on the page and waits in one quiet `Add` row.
 - **Request line** at full width on top: Method, URL, Send. Under it, one line says where it goes: `Sends to <resolved address>`.
 - **Two facing pages** under the request line, split by one hairline: request left, response right, same section order (Headers, Body, script ↔ Headers, Body, Tests, Variables set). Narrow window or `Response below` setting: the response stacks under the request.
-- Request sections, wire order: Parameters, Authorization, Headers, Body, Pre-request script, Post-response script, Settings.
+- Request sections, wire order: Path variables, Parameters, Authorization, Headers, Body, Pre-request script, Post-response script, Settings. Path variables follow the URL: the section is there when the URL has `:name` segments, and can be neither added nor removed.
 - Response: status line (Status · Time · Size) is its headline; then Headers, Body, Tests, Variables set, Console, Request sent.
 - **Sidebar** (system glass): New request, Collections (tree), Environments (active one marked `Active`), History. Methods are quiet monochrome capitals.
 - **Toolbar**: title + breadcrumb leading; the Environment capsule trailing. Nothing else.
@@ -25,7 +25,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 - **Status colors** only on status and test marks, always with a glyph and words: positive `#1A7F37` / `#3FB950` dark, warning `#9A6700` / `#D29922`, negative `#C6372B` / `#F85149`.
 - **Outline rule.** 1 px outline, radius 8, around what can be written or pressed (fields, editors, pop-ups, secondary buttons). Nothing around what is read. No separators on the paper except the hairline between the two pages; grouping by space.
 - **Spacing** 4 · 8 · 12 · 16 · 24 · 32. 24 between sections, 8 from a heading to its content, page inset 24.
-- **Variable token**: `{{name}}` keeps its braces on a neutral ground (radius 5). A secret adds a lock glyph; its value is never rendered, anywhere, unless the person reveals it.
+- **Variable token**: `{{name}}` keeps its braces on a neutral ground (radius 5); in the URL a path variable `:name` is a token too. A token without a value is drawn in the warning color. A secret adds a lock glyph; its value is never rendered, anywhere, unless the person reveals it.
 - **Syntax**: ink, secondary, and two quiet hues (strings, numbers). No rainbow.
 - Radii: window and sidebar by the system, fields 8, tokens 5, Send capsule.
 
@@ -38,7 +38,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 
 ## Lexicon (interface copy, English)
 
-Request · Method · URL · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
+Request · Method · URL · Path variable · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
 
 Sentence case everywhere. Verbs on buttons. Errors say what happened and what to do.
 

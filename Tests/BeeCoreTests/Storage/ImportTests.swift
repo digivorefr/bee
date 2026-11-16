@@ -312,15 +312,17 @@ import Testing
         #expect(collection.preRequestScript.contains("X-Request-Id"))
         let requests = collection.allRequests
         #expect(requests.map(\.name) == [
-            "Get with parameters", "Send JSON", "Send a secret header",
+            "Get with parameters", "Get by path variable", "Send JSON", "Send a secret header",
             "1 · Get a token", "2 · Call with the token", "Teapot",
         ])
         for request in requests {
             #expect(request.url.hasPrefix("{{baseUrl}}"))
         }
-        #expect(requests[2].headers.first?.isSecret == true)
-        #expect(requests[4].auth.kind == .bearer)
-        #expect(requests[4].auth.bearerToken.value == "{{accessToken}}")
+        #expect(PathVariables.names(in: requests[1].url) == ["ticketId", "commentId"])
+        #expect(requests[1].pathVariables.map(\.key) == ["commentId"])
+        #expect(requests[3].headers.first?.isSecret == true)
+        #expect(requests[5].auth.kind == .bearer)
+        #expect(requests[5].auth.bearerToken.value == "{{accessToken}}")
 
         let encoded = try StorageCoding.encoder().encode(workspace)
         #expect(!encoded.contains("demo-token-1234"))

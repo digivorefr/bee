@@ -28,6 +28,11 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 
 `~/Library/Application Support/Bee/`: `workspace.json`, `collections/`, `environments/`, `history.json`, `settings.json`, `secrets.vault`.
 
+## Variables
+
+- `{{name}}` anywhere in a request is replaced by the variable of that name: the active environment first, then the collection, then the globals.
+- A path segment written `:name` (`/tickets/:ticketId`) is a path variable. Its value is set under **Path variables** and may use `{{variables}}`; left empty, it takes the variable of the same name. The value is percent-encoded as one segment (`a/b` is sent as `a%2Fb`), where a `{{placeholder}}` typed in the URL is pasted as it is.
+
 ## Secrets
 
 - A secret (a secret variable, an authorization credential, a row marked secret) is never encoded by the models: no workspace file, history entry, export or cURL command can contain its value.

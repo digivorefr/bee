@@ -92,18 +92,77 @@ private struct KeyValueRow: View {
         )
     }
 
-    /// Sealing is immediate; unsealing would draw the value, so it asks like a reveal does.
     private func toggleSecret() {
-        guard row.isSecret else {
-            row.isSecret = true
-            return
+        RequestSealing.toggle($row.isSecret, value: row.value, model: model)
+    }
+}
+
+// MARK: - Path variables table
+
+/// The values of the `:name` segments of the address. The rows follow the address: a name is read
+/// here, never typed. An empty value shows, as its placeholder, the variable it then takes.
+struct PathVariablesTable: View {
+    @Binding private var stored: [KeyValue]
+    private let address: String
+    private let context: VariableContext
+
+    /// - Parameter rows: the rows kept with the request (only the ones that say something).
+    init(rows: Binding<[KeyValue]>, address: String, context: VariableContext) {
+        _stored = rows
+        self.address = address
+        self.context = context
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RequestTableCaptions(columns: [("Name", RequestMetrics.nameWidth), ("Value", nil)])
+            ForEach(PathVariables.rows(for: address, from: stored), id: \.key) { row in
+                PathVariableRow(row: binding(for: row), context: context)
+            }
         }
-        if row.value.isEmpty || RequestText.isPlaceholderOnly(row.value) {
-            row.isSecret = false
-            return
-        }
-        Task {
-            if await model.authorizeReveal() { row.isSecret = false }
+    }
+
+    /// A binding by name: a row exists on the page before it is kept with the request.
+    private func binding(for row: KeyValue) -> Binding<KeyValue> {
+        Binding(
+            get: { PathVariables.rows(for: address, from: stored).first { $0.key == row.key } ?? row },
+            set: { updated in
+                var rows = PathVariables.rows(for: address, from: stored)
+                guard let index = rows.firstIndex(where: { $0.key == updated.key }) else { return }
+                rows[index] = updated
+                stored = PathVariables.storedRows(for: address, from: rows)
+            }
+        )
+    }
+}
+
+private struct PathVariableRow: View {
+    @Environment(AppModel.self) private var model
+    @Binding var row: KeyValue
+    let context: VariableContext
+
+    var body: some View {
+        let fallback = "{{\(row.key)}}"
+        RequestTableRow(
+            isEnabled: nil, itemName: "path variable \(row.key)", isSecret: row.isSecret,
+            toggleSecret: { RequestSealing.toggle($row.isSecret, value: row.value, model: model) }, remove: nil
+        ) {
+            Text(row.key)
+                .font(Theme.mono())
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: RequestMetrics.nameWidth, alignment: .leading)
+                .help(row.key)
+            Group {
+                if row.isSecret {
+                    SecretValueField(fallback, text: $row.value, context: context, isBordered: false)
+                } else {
+                    TemplateField(fallback, text: $row.value, context: context, isBordered: false)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Value of \(row.key)")
         }
     }
 }
@@ -216,21 +275,28 @@ private struct FormFieldRow: View {
     }
 
     private func toggleSecret() {
-        guard row.isSecret else {
-            row.isSecret = true
-            return
-        }
-        if row.value.isEmpty || RequestText.isPlaceholderOnly(row.value) {
-            row.isSecret = false
-            return
-        }
-        Task {
-            if await model.authorizeReveal() { row.isSecret = false }
-        }
+        RequestSealing.toggle($row.isSecret, value: row.value, model: model)
     }
 }
 
 // MARK: - Shared table parts
+
+enum RequestSealing {
+    /// Sealing is immediate; unsealing would draw the value, so it asks like a reveal does.
+    static func toggle(_ isSecret: Binding<Bool>, value: String, model: AppModel) {
+        guard isSecret.wrappedValue else {
+            isSecret.wrappedValue = true
+            return
+        }
+        if value.isEmpty || RequestText.isPlaceholderOnly(value) {
+            isSecret.wrappedValue = false
+            return
+        }
+        Task {
+            if await model.authorizeReveal() { isSecret.wrappedValue = false }
+        }
+    }
+}
 
 /// Column captions in caption ink.
 struct RequestTableCaptions: View {
@@ -253,21 +319,26 @@ struct RequestTableCaptions: View {
 /// One row: the enable mark in the gutter (shown on hover or when the row is off), the cells,
 /// the lock that seals the value, and Remove on hover.
 struct RequestTableRow<Cells: View>: View {
-    @Binding private var isEnabled: Bool
+    private let enabling: Binding<Bool>?
     private let itemName: String
     private let isSecret: Bool?
     private let toggleSecret: () -> Void
-    private let remove: () -> Void
+    private let remove: (() -> Void)?
     private let cells: Cells
     @ViewState private var isHovered = false
 
-    /// - Parameter isSecret: `nil` when the row cannot be sealed (a file).
+    private var isEnabled: Bool { enabling?.wrappedValue ?? true }
+
+    /// - Parameters:
+    ///   - isEnabled: `nil` when the row cannot be turned off.
+    ///   - isSecret: `nil` when the row cannot be sealed (a file).
+    ///   - remove: `nil` when the row cannot be removed.
     init(
-        isEnabled: Binding<Bool>, itemName: String, isSecret: Bool?,
-        toggleSecret: @escaping () -> Void, remove: @escaping () -> Void,
+        isEnabled: Binding<Bool>?, itemName: String, isSecret: Bool?,
+        toggleSecret: @escaping () -> Void, remove: (() -> Void)?,
         @ViewBuilder cells: () -> Cells
     ) {
-        _isEnabled = isEnabled
+        enabling = isEnabled
         self.itemName = itemName
         self.isSecret = isSecret
         self.toggleSecret = toggleSecret
@@ -277,11 +348,15 @@ struct RequestTableRow<Cells: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RequestGlyphButton(
-                isEnabled ? "checkmark.square" : "square",
-                label: isEnabled ? "Turn off \(itemName)" : "Turn on \(itemName)"
-            ) { isEnabled.toggle() }
-                .opacity(isHovered || !isEnabled ? 1 : 0)
+            if let enabling {
+                RequestGlyphButton(
+                    isEnabled ? "checkmark.square" : "square",
+                    label: isEnabled ? "Turn off \(itemName)" : "Turn on \(itemName)"
+                ) { enabling.wrappedValue.toggle() }
+                    .opacity(isHovered || !isEnabled ? 1 : 0)
+            } else {
+                Color.clear.frame(width: Theme.Layout.gutter)
+            }
             HStack(spacing: Theme.Space.s) {
                 cells
             }
@@ -294,8 +369,13 @@ struct RequestTableRow<Cells: View>: View {
                 )
                 .opacity(isSecret || isHovered ? 1 : 0)
             }
-            RequestGlyphButton("xmark", label: "Remove \(itemName)", action: remove)
-                .opacity(isHovered ? 1 : 0)
+            if let remove {
+                RequestGlyphButton("xmark", label: "Remove \(itemName)", action: remove)
+                    .opacity(isHovered ? 1 : 0)
+            } else {
+                // The value column ends where it does in the other tables.
+                Color.clear.frame(width: Theme.Layout.gutter)
+            }
         }
         .frame(height: RequestMetrics.rowHeight)
         // The enable mark hangs in the gutter; the row's hover area reaches over it.

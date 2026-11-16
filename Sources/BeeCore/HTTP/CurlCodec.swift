@@ -104,7 +104,14 @@ public enum CurlCodec {
         }
         if let derivedContentType, !hasHeader("Content-Type") { headers.append(("Content-Type", derivedContentType)) }
 
-        let address = URLTemplate.join(base: item.url, params: rows)
+        // Path variables are written out as their value template, encoded as one segment.
+        let base = PathVariables.substituting(item.url) { name in
+            let row = item.pathVariables.first { $0.key == name }
+            let template = PathVariables.valueTemplate(for: name, in: item.pathVariables)
+            let value = row?.isSecret == true ? slot(template) : template
+            return value == placeholder ? value : PercentCoding.mapText(of: value, PercentCoding.encodePathSegment)
+        }
+        let address = URLTemplate.join(base: base, params: rows)
         var first = "curl"
         switch item.method {
         case .head: first += " -I"

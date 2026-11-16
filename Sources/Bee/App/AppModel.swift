@@ -19,12 +19,16 @@ enum SidebarSelection: Hashable, Sendable {
 /// The parts of a request, in wire order. A part is on the page only when the request has it
 /// or the person just added it.
 enum RequestSection: String, CaseIterable, Hashable, Sendable, Identifiable {
-    case parameters, authorization, headers, body, preRequestScript, postResponseScript, settings
+    case pathVariables, parameters, authorization, headers, body, preRequestScript, postResponseScript, settings
 
     var id: String { rawValue }
 
+    /// True for a part that follows the address: it can be neither added nor removed.
+    var followsAddress: Bool { self == .pathVariables }
+
     var title: String {
         switch self {
+        case .pathVariables: "Path variables"
         case .parameters: "Parameters"
         case .authorization: "Authorization"
         case .headers: "Headers"
@@ -104,6 +108,7 @@ final class RequestSession: Identifiable {
     /// True when the request has content for the part.
     func has(_ section: RequestSection) -> Bool {
         switch section {
+        case .pathVariables: !PathVariables.names(in: item.url).isEmpty
         case .parameters: !item.queryParams.isEmpty
         case .authorization: item.auth.kind != .inherit
         case .headers: !item.headers.isEmpty
@@ -119,7 +124,9 @@ final class RequestSession: Identifiable {
     }
 
     var visibleSections: [RequestSection] { RequestSection.allCases.filter(isVisible) }
-    var absentSections: [RequestSection] { RequestSection.allCases.filter { !isVisible($0) } }
+    var absentSections: [RequestSection] {
+        RequestSection.allCases.filter { !$0.followsAddress && !isVisible($0) }
+    }
 
     /// Puts an absent part on the page, open.
     func add(_ section: RequestSection) {
@@ -133,6 +140,7 @@ final class RequestSession: Identifiable {
     func remove(_ section: RequestSection) {
         addedRequestSections.remove(section)
         switch section {
+        case .pathVariables: break
         case .parameters: item.queryParams = []
         case .authorization: item.auth.kind = .inherit
         case .headers: item.headers = []
@@ -370,6 +378,7 @@ final class AppModel {
         func clear(_ rows: inout [KeyValue]) {
             for index in rows.indices where downgraded.contains(rows[index].id) { rows[index].value = "" }
         }
+        clear(&item.pathVariables)
         clear(&item.queryParams)
         clear(&item.headers)
         clear(&item.body.urlEncoded)

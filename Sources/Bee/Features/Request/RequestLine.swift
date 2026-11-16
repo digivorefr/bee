@@ -44,7 +44,7 @@ struct RequestLineView: View {
                 .frame(width: Self.methodWidth)
                 TemplateField(
                     "https://api.example.com/path", text: addressBinding, context: context,
-                    size: Theme.Size.headline
+                    size: Theme.Size.headline, pathVariables: session.item.pathVariables
                 ) { send() }
                 sendButton
                 moreMenu
@@ -85,6 +85,7 @@ struct RequestLineView: View {
         let parsed = URLTemplate.split(text)
         var item = session.item
         item.url = parsed.base
+        item.pathVariables = PathVariables.storedRows(for: parsed.base, from: item.pathVariables)
         let previous = item.queryParams
         item.queryParams = URLTemplate.merge(parsed: parsed.params, into: previous).map { row in
             // Typing next to the mask of a secret must not store the mask: secrets are edited in
@@ -180,15 +181,22 @@ struct RequestLineView: View {
     private func destination(in context: VariableContext) -> Destination {
         let joined = address
         guard !isAddressEmpty else { return .empty }
-        let usesVariables = TemplateEngine.tokens(in: joined).contains { token in
-            if case .variable = token.kind { true } else { false }
+        let pathVariables = session.item.pathVariables
+        // The address and the templates that give its path variables their values.
+        let templates = [joined] + PathVariables.names(in: joined).map {
+            PathVariables.valueTemplate(for: $0, in: pathVariables)
+        }
+        let usesVariables = templates.contains { template in
+            TemplateEngine.tokens(in: template).contains { token in
+                if case .variable = token.kind { true } else { false }
+            }
         }
         // Secret variables are masked before rendering, so a short secret cannot slip past the redactor.
         var sealed = context
         sealed.environment = sealed.environment.map(Self.seal)
         sealed.collection = sealed.collection.map(Self.seal)
         sealed.globals = sealed.globals.map(Self.seal)
-        let result = TemplateEngine.render(joined, in: sealed)
+        let result = PathVariables.render(joined, rows: pathVariables, in: sealed, secretMask: Redactor.mask)
 
         let hasEnvironment = model.workspace.activeEnvironment != nil
         if !result.unresolved.isEmpty {

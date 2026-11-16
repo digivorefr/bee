@@ -42,6 +42,7 @@ private struct RequestSectionView: View {
 
     private var count: Int? {
         switch section {
+        case .pathVariables: PathVariables.names(in: session.item.url).count
         case .parameters: session.item.queryParams.count
         case .headers: session.item.headers.count
         default: nil
@@ -54,11 +55,13 @@ private struct RequestSectionView: View {
             RequestSectionSummary(item: session.item, section: section, context: context)
         } accessory: {
             HStack(spacing: Theme.Space.m) {
-                Button("Remove") { session.remove(section) }
-                    .buttonStyle(QuietButtonStyle())
-                    .opacity(isHovered ? 1 : 0)
-                    .accessibilityLabel("Remove \(section.title)")
-                    .help("Remove \(section.title) from the request")
+                if !section.followsAddress {
+                    Button("Remove") { session.remove(section) }
+                        .buttonStyle(QuietButtonStyle())
+                        .opacity(isHovered ? 1 : 0)
+                        .accessibilityLabel("Remove \(section.title)")
+                        .help("Remove \(section.title) from the request")
+                }
                 if isExpanded.wrappedValue { actions }
             }
         } content: {
@@ -67,13 +70,17 @@ private struct RequestSectionView: View {
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         // A part on the page stays there while it is edited, even emptied; Remove takes it off.
-        .onAppear { session.addedRequestSections.insert(section) }
+        .onAppear {
+            if !section.followsAddress { session.addedRequestSections.insert(section) }
+        }
     }
 
     @ViewBuilder
     private func content(_ context: VariableContext) -> some View {
         @Bindable var session = session
         switch section {
+        case .pathVariables:
+            PathVariablesTable(rows: $session.item.pathVariables, address: session.item.url, context: context)
         case .parameters:
             KeyValueTable(rows: $session.item.queryParams, noun: "parameter", context: context)
         case .authorization:
@@ -125,6 +132,16 @@ private struct RequestSectionSummary: View {
 
     var body: some View {
         switch section {
+        case .pathVariables:
+            // Each name with the template that gives it its value.
+            PairsSummary(
+                rows: PathVariables.rows(for: item.url, from: item.pathVariables).map { row in
+                    var row = row
+                    row.value = PathVariables.valueTemplate(for: row.key, in: item.pathVariables)
+                    return row
+                },
+                context: context
+            )
         case .parameters:
             PairsSummary(rows: item.queryParams, context: context)
         case .headers:

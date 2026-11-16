@@ -126,8 +126,12 @@ public struct RequestItem: Identifiable, Hashable, Sendable, Codable, SecretCont
     public var id: UUID
     public var name: String
     public var method: HTTPMethod
-    /// Address without its query string; may contain `{{placeholders}}`. See `URLTemplate`.
+    /// Address without its query string; may contain `{{placeholders}}` and `:name` path variables.
+    /// See `URLTemplate` and `PathVariables`.
     public var url: String
+    /// Values of the `:name` segments of `url`, by name. Only rows that say something are kept: a path
+    /// variable without a row takes the variable of the same name.
+    public var pathVariables: [KeyValue]
     public var queryParams: [KeyValue]
     public var headers: [KeyValue]
     public var auth: AuthConfig
@@ -139,14 +143,15 @@ public struct RequestItem: Identifiable, Hashable, Sendable, Codable, SecretCont
 
     public init(
         id: UUID = UUID(), name: String = "Untitled request", method: HTTPMethod = .get, url: String = "",
-        queryParams: [KeyValue] = [], headers: [KeyValue] = [], auth: AuthConfig = AuthConfig(),
-        body: RequestBody = RequestBody(), preRequestScript: String = "", postResponseScript: String = "",
-        settings: RequestSettings = RequestSettings(), notes: String = ""
+        pathVariables: [KeyValue] = [], queryParams: [KeyValue] = [], headers: [KeyValue] = [],
+        auth: AuthConfig = AuthConfig(), body: RequestBody = RequestBody(), preRequestScript: String = "",
+        postResponseScript: String = "", settings: RequestSettings = RequestSettings(), notes: String = ""
     ) {
         self.id = id
         self.name = name
         self.method = method
         self.url = url
+        self.pathVariables = pathVariables
         self.queryParams = queryParams
         self.headers = headers
         self.auth = auth
@@ -157,7 +162,31 @@ public struct RequestItem: Identifiable, Hashable, Sendable, Codable, SecretCont
         self.notes = notes
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, name, method, url, pathVariables, queryParams, headers, auth, body
+        case preRequestScript, postResponseScript, settings, notes
+    }
+
+    /// Every field but the identifier may be missing, so a file written by an earlier version still opens.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled request"
+        method = try container.decodeIfPresent(HTTPMethod.self, forKey: .method) ?? .get
+        url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+        pathVariables = try container.decodeIfPresent([KeyValue].self, forKey: .pathVariables) ?? []
+        queryParams = try container.decodeIfPresent([KeyValue].self, forKey: .queryParams) ?? []
+        headers = try container.decodeIfPresent([KeyValue].self, forKey: .headers) ?? []
+        auth = try container.decodeIfPresent(AuthConfig.self, forKey: .auth) ?? AuthConfig()
+        body = try container.decodeIfPresent(RequestBody.self, forKey: .body) ?? RequestBody()
+        preRequestScript = try container.decodeIfPresent(String.self, forKey: .preRequestScript) ?? ""
+        postResponseScript = try container.decodeIfPresent(String.self, forKey: .postResponseScript) ?? ""
+        settings = try container.decodeIfPresent(RequestSettings.self, forKey: .settings) ?? RequestSettings()
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+    }
+
     public mutating func forEachSecret(_ body: (UUID, inout String) -> Void) {
+        pathVariables.forEachSecret(body)
         queryParams.forEachSecret(body)
         headers.forEachSecret(body)
         auth.forEachSecret(body)
@@ -170,6 +199,7 @@ public struct RequestItem: Identifiable, Hashable, Sendable, Codable, SecretCont
         var copy = self
         copy.id = UUID()
         if let newName { copy.name = newName }
+        copy.pathVariables = copy.pathVariables.map { var row = $0; row.id = UUID(); return row }
         copy.queryParams = copy.queryParams.map { var row = $0; row.id = UUID(); return row }
         copy.headers = copy.headers.map { var row = $0; row.id = UUID(); return row }
         copy.body.urlEncoded = copy.body.urlEncoded.map { var row = $0; row.id = UUID(); return row }

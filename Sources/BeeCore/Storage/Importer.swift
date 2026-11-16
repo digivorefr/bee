@@ -214,6 +214,7 @@ enum PostmanReader {
             methodNote = "The method \(methodName) is not supported by Bee; GET is used instead."
         }
         (result.url, result.queryParams) = address(request["url"])
+        result.pathVariables = pathVariables(request["url"], address: result.url)
         result.headers = headers(request["header"])
         result.body = body(request["body"], headers: result.headers)
         let (auth, authNote) = authorization(request["auth"], whenMissing: .inherit)
@@ -240,6 +241,16 @@ enum PostmanReader {
             return keyValue(key: String(parts[0]), value: parts.count > 1 ? String(parts[1]) : "", disabled: nil)
         }
         return (base, rows)
+    }
+
+    /// The values Postman keeps for the `:name` segments of the address (`url.variable`). A variable left
+    /// empty gets no row: Bee then reads the variable of the same name.
+    private static func pathVariables(_ value: JSONValue?, address: String) -> [KeyValue] {
+        let rows = (value?["variable"]?.array ?? []).compactMap { entry -> KeyValue? in
+            guard let key = entry["key"]?.text ?? entry["id"]?.text, !key.isEmpty else { return nil }
+            return keyValue(key: key, value: entry["value"]?.text ?? "", disabled: nil)
+        }
+        return PathVariables.storedRows(for: address, from: rows)
     }
 
     /// Splits at the first `?`; the fragment, which is never sent, is dropped with the query.
