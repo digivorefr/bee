@@ -255,11 +255,13 @@ public struct AppSettings: Hashable, Sendable, Codable {
     public var requireAuthenticationToReveal: Bool
     public var historyLimit: Int
     public var responseLayout: ResponseLayout
+    /// The version of Bee that last ran with these settings; `nil` before the first run. Tells an update.
+    public var lastRunVersion: String?
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
         requireAuthenticationToReveal: Bool = true, historyLimit: Int = 200,
-        responseLayout: ResponseLayout = .beside
+        responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -267,10 +269,12 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.requireAuthenticationToReveal = requireAuthenticationToReveal
         self.historyLimit = historyLimit
         self.responseLayout = responseLayout
+        self.lastRunVersion = lastRunVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
+        case lastRunVersion
     }
 
     public init(from decoder: Decoder) throws {
@@ -283,6 +287,7 @@ public struct AppSettings: Hashable, Sendable, Codable {
             ?? defaults.requireAuthenticationToReveal
         historyLimit = try container.decodeIfPresent(Int.self, forKey: .historyLimit) ?? defaults.historyLimit
         responseLayout = try container.decodeIfPresent(ResponseLayout.self, forKey: .responseLayout) ?? defaults.responseLayout
+        lastRunVersion = try container.decodeIfPresent(String.self, forKey: .lastRunVersion)
     }
 }
 

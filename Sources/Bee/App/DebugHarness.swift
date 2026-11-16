@@ -18,6 +18,7 @@ import SwiftUI
 ///     snapshot:<png path>        sidebarshot:<png path>     quit
 ///     click:<x>,<y>   doubleclick:<x>,<y>   type:<text>   selectall   key:return|tab|escape|delete   focus
 ///     cmd:<key>   windowshot:<png path>   front
+///     menu:<menu item title>     shot:<window title>|<png path>
 ///
 /// Clicks and shortcuts reach SwiftUI controls only when the app is frontmost: start it with
 /// `open -n dist/Bee.app --env BEE_SCENARIO=… --env BEE_HARNESS_LOG=<file>`.
@@ -201,6 +202,27 @@ enum DebugHarness {
             mainWindow()?.makeKeyAndOrderFront(nil)
             try? await Task.sleep(for: .milliseconds(500))
             log("front: active \(NSApp.isActive) key \(mainWindow()?.isKeyWindow ?? false)")
+        case "menu":
+            // Chooses a menu bar item by its title, wherever it is.
+            func find(_ title: String, in menu: NSMenu?) -> (NSMenu, Int)? {
+                guard let menu else { return nil }
+                for (index, item) in menu.items.enumerated() {
+                    if item.title == title, !item.hasSubmenu { return (menu, index) }
+                    if let found = find(title, in: item.submenu) { return found }
+                }
+                return nil
+            }
+            guard let (menu, index) = find(argument, in: NSApp.mainMenu) else { return log("menu: no item titled \(argument)") }
+            menu.performActionForItem(at: index)
+            try? await Task.sleep(for: .milliseconds(600))
+        case "shot":
+            // Snapshots the window with the given title.
+            let parts = argument.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let window = NSApp.windows.first(where: { $0.title == parts[0] }) else {
+                return log("shot: no window titled \(parts.first ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(350))
+            snapshot(to: parts[1], window: window)
         case "focus":
             let window = mainWindow()
             log("first responder: \(String(describing: window?.firstResponder)) key: \(window?.isKeyWindow ?? false) active: \(NSApp.isActive)")

@@ -4,6 +4,12 @@ A native macOS API client: requests, collections, environments, variables, pre-r
 
 Swift 6 · SwiftUI + AppKit · arm64 · macOS 26+ · no third-party dependency.
 
+## Install
+
+Download `Bee-<version>.zip` from the [latest release](https://github.com/digivorefr/bee/releases/latest), open it and move **Bee** to Applications. Bee needs a Mac with Apple silicon and macOS 26 or later.
+
+Bee is not notarized by Apple yet, so macOS refuses to open it the first time: go to **System Settings › Privacy & Security**, scroll down to **Security** and click **Open Anyway**. This is asked once per version.
+
 ## Build and run
 
 Only the Command Line Tools are required (no Xcode).
@@ -22,7 +28,8 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 | `Sources/Bee` | The application: model, design system, features |
 | `Tests/BeeCoreTests` | Swift Testing suites for the core |
 | `design/language.md` | The design language every screen follows |
-| `Scripts/` | `build-app.sh` (bundle), `make-icon.swift` (icon) |
+| `CHANGELOG.md` | What changed in each version; its first entry is the version of the build, and Bee shows it under Help › What's New in Bee |
+| `Scripts/` | `build-app.sh` (bundle), `release.sh` (download archive and GitHub release), `version.sh`, `make-icon.swift` (icon) |
 
 ## Where data lives
 
@@ -64,6 +71,22 @@ BEE_DATA_DIR=$(mktemp -d) BEE_SCENARIO="select:Send JSON;send;snapshot:/tmp/bee.
 ```
 
 `BEE_DATA_DIR` makes the data throwaway (in-memory vault, no Keychain). Release builds ignore both variables.
+
+## Releasing
+
+1. Add a section at the top of `CHANGELOG.md`: `## 1.1.0 — 2027-01-31`, then `### Added`, `### Changed` or `### Fixed` with one `- ` line per change, written for the people who use Bee. That heading is the version of the build.
+2. Commit and push.
+3. Package and check the result (`dist/Bee-<version>.zip` holds the application and the license; the notes are that section of the changelog followed by how to install):
+
+```bash
+Scripts/release.sh
+```
+
+4. Publish the tag and the archive as a GitHub release:
+
+```bash
+Scripts/release.sh --publish
+```
 
 ## License
 

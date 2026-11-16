@@ -18,7 +18,8 @@ while [ $# -gt 0 ]; do
 done
 
 APP="$OUT/Bee.app"
-VERSION="1.0.0"
+# The version is the first one listed in CHANGELOG.md.
+VERSION="$("$ROOT/Scripts/version.sh")"
 
 cd "$ROOT"
 swift build -c "$CONFIG" --arch arm64 --product Bee 2>&1 | grep -v "search path" || true
@@ -29,6 +30,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/Bee"
 [ -f "$ROOT/Resources/Bee.icns" ] && cp "$ROOT/Resources/Bee.icns" "$APP/Contents/Resources/Bee.icns"
+# Shown in the application under Help > What's New in Bee.
+cp "$ROOT/CHANGELOG.md" "$APP/Contents/Resources/CHANGELOG.md"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -57,7 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Bee sends the requests you compose to servers on your local network.</string>
-    <key>NSHumanReadableCopyright</key><string>Bee</string>
+    <key>NSHumanReadableCopyright</key><string>Copyright 2026 Pierre Bonnin. PolyForm Noncommercial License 1.0.0.</string>
 </dict>
 </plist>
 PLIST
@@ -66,5 +69,5 @@ PLIST
 codesign --force --sign - --timestamp=none "$APP" >/dev/null
 codesign --verify --strict "$APP"
 
-echo "Built $APP ($CONFIG)"
+echo "Built $APP ($CONFIG, version $VERSION)"
 if $OPEN_AFTER; then open "$APP"; fi

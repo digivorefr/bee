@@ -246,6 +246,13 @@ final class AppModel {
         history = await store.loadHistory()
         isLoaded = true
         if loaded.isFirstLaunch { scheduleSave() }
+        // After an update, one line says so and where the changes are listed.
+        if let version = WhatsNew.installedVersion, settings.lastRunVersion != version {
+            if settings.lastRunVersion != nil {
+                notice = Notice(kind: .info, message: "Bee was updated to \(version). Help › What’s New in Bee lists what changed.")
+            }
+            settings.lastRunVersion = version
+        }
         if let warning = loaded.warnings.first {
             notice = Notice(kind: .error, message: warning)
         }

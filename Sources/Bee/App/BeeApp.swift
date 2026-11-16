@@ -29,6 +29,12 @@ struct BeeApp: App {
         .windowToolbarStyle(.unified)
         .commands { BeeCommands(model: model) }
 
+        Window(WhatsNew.windowTitle, id: WhatsNew.windowID) {
+            WhatsNewView()
+        }
+        .defaultSize(width: 560, height: 640)
+        .windowResizability(.contentMinSize)
+
         Settings {
             SettingsView()
                 .environment(model)

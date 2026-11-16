@@ -44,6 +44,8 @@ extension AppModel {
 struct BeeCommands: Commands {
     let model: AppModel
     @FocusedValue(\.shellFocus) private var focus
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openURL) private var openURL
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -70,6 +72,13 @@ struct BeeCommands: Commands {
             Button("Delete") { deleteSelectedRequest() }
                 .keyboardShortcut(.delete)
                 .disabled(focus?.hasRequest == false)
+        }
+
+        CommandGroup(replacing: .help) {
+            Button("What’s New in Bee") { openWindow(id: WhatsNew.windowID) }
+            if let page = WhatsNew.projectPage {
+                Button("Bee on GitHub") { openURL(page) }
+            }
         }
 
         CommandGroup(before: .sidebar) {
