@@ -25,13 +25,17 @@ public struct TemplateToken: Hashable, Sendable {
 
 public struct RenderResult: Hashable, Sendable {
     public var text: String
+    /// `text` as it may be drawn or kept: each expansion of a secret variable is replaced by `Redactor.mask`,
+    /// whatever its length. Equal to `text` when no secret was used.
+    public var shown: String
     /// Distinct names that could not be resolved, in order of first appearance.
     public var unresolved: [String]
     /// True when a secret variable was found and expanded, so `text` may hold a secret value.
     public var usedSecret: Bool
 
-    public init(text: String, unresolved: [String] = [], usedSecret: Bool = false) {
+    public init(text: String, shown: String? = nil, unresolved: [String] = [], usedSecret: Bool = false) {
         self.text = text
+        self.shown = shown ?? text
         self.unresolved = unresolved
         self.usedSecret = usedSecret
     }
@@ -95,8 +99,10 @@ public enum TemplateEngine {
     /// depth limit stays verbatim in the output and is reported in `unresolved`.
     public static func render(_ template: String, in context: VariableContext) -> RenderResult {
         var state = RenderState()
-        let text = expand(template, context: context, depth: 0, active: [], state: &state)
-        return RenderResult(text: text, unresolved: state.unresolved, usedSecret: state.usedSecret)
+        let expanded = expand(template, context: context, depth: 0, active: [], state: &state)
+        return RenderResult(
+            text: expanded.text, shown: expanded.shown, unresolved: state.unresolved, usedSecret: state.usedSecret
+        )
     }
 
     // MARK: Implementation
@@ -111,37 +117,45 @@ public enum TemplateEngine {
         }
     }
 
+    /// The expansion and its masked twin, built in one pass so dynamic values are the same in both.
     private static func expand(
         _ template: String, context: VariableContext, depth: Int, active: [String], state: inout RenderState
-    ) -> String {
-        guard template.contains("{{") else { return template }
+    ) -> (text: String, shown: String) {
+        guard template.contains("{{") else { return (template, template) }
         var output = ""
+        var shown = ""
         for token in tokens(in: template) {
             let verbatim = template[token.range]
             switch token.kind {
             case .text:
                 output += verbatim
+                shown += verbatim
             case .dynamic(let name):
-                if let value = dynamicValue(name) {
-                    output += value
-                } else {
-                    state.report(name)
-                    output += verbatim
-                }
+                let value = dynamicValue(name)
+                if value == nil { state.report(name) }
+                output += value ?? String(verbatim)
+                shown += value ?? String(verbatim)
             case .variable(let name):
                 guard let lookup = context.lookup(name), !active.contains(name),
                       depth < maxDepth, state.expansions < maxExpansions
                 else {
                     state.report(name)
                     output += verbatim
+                    shown += verbatim
                     continue
                 }
                 state.expansions += 1
                 if lookup.isSecret { state.usedSecret = true }
-                output += expand(lookup.value, context: context, depth: depth + 1, active: active + [name], state: &state)
+                let inner = expand(lookup.value, context: context, depth: depth + 1, active: active + [name], state: &state)
+                output += inner.text
+                if lookup.isSecret {
+                    shown += inner.text.isEmpty ? "" : Redactor.mask
+                } else {
+                    shown += inner.shown
+                }
             }
         }
-        return output
+        return (output, shown)
     }
 
     /// The value of a dynamic variable, evaluated afresh at each call; `nil` for an unknown name.

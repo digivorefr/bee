@@ -84,8 +84,8 @@ struct RequestLineView: View {
     private func write(_ text: String) {
         let parsed = URLTemplate.split(text)
         var item = session.item
+        item.pathVariables = session.pathVariables(for: parsed.base)
         item.url = parsed.base
-        item.pathVariables = PathVariables.storedRows(for: parsed.base, from: item.pathVariables)
         let previous = item.queryParams
         item.queryParams = URLTemplate.merge(parsed: parsed.params, into: previous).map { row in
             // Typing next to the mask of a secret must not store the mask: secrets are edited in
@@ -191,12 +191,9 @@ struct RequestLineView: View {
                 if case .variable = token.kind { true } else { false }
             }
         }
-        // Secret variables are masked before rendering, so a short secret cannot slip past the redactor.
-        var sealed = context
-        sealed.environment = sealed.environment.map(Self.seal)
-        sealed.collection = sealed.collection.map(Self.seal)
-        sealed.globals = sealed.globals.map(Self.seal)
-        let result = PathVariables.render(joined, rows: pathVariables, in: sealed, secretMask: Redactor.mask)
+        // What is drawn is the masked twin of the render: a secret is hidden where it is put in, so a
+        // short one cannot slip past the redactor.
+        let result = PathVariables.render(joined, rows: pathVariables, in: context)
 
         let hasEnvironment = model.workspace.activeEnvironment != nil
         if !result.unresolved.isEmpty {
@@ -205,14 +202,7 @@ struct RequestLineView: View {
         }
         let secrets = (context.environment + context.collection + context.globals)
             .filter(\.isSecret).map(\.value) + session.item.secretValues()
-        return .resolved(Redactor(secrets: secrets).redact(result.text))
-    }
-
-    private static func seal(_ variable: Variable) -> Variable {
-        guard variable.isSecret, !variable.value.isEmpty else { return variable }
-        var sealed = variable
-        sealed.value = Redactor.mask
-        return sealed
+        return .resolved(Redactor(secrets: secrets).redact(result.shown))
     }
 }
 

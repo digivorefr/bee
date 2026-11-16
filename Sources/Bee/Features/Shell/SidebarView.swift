@@ -248,7 +248,10 @@ struct SidebarView: View {
             // A click anywhere but in the name being edited ends the rename and keeps what was typed
             // (a click on bare paper does not take the focus away, so the field cannot tell by itself).
             if shell.renaming != nil {
-                if let editor = event.window?.firstResponder as? NSText, hit.isDescendant(of: editor) {
+                // A click in the name being edited places the caret. SwiftUI routes clicks itself (the
+                // hit view is the row's hosting view), so the field is told by where its editor is.
+                if let editor = event.window?.firstResponder as? NSText,
+                   editor.convert(editor.bounds, to: nil).insetBy(dx: -8, dy: -6).contains(event.locationInWindow) {
                     return event
                 }
                 shell.commitRename?()

@@ -201,11 +201,10 @@ enum TokenStyler {
 
         if let pathVariables {
             for occurrence in PathVariables.occurrences(in: text) {
-                let row = pathVariables.first { $0.key == occurrence.name }
                 let template = PathVariables.valueTemplate(for: occurrence.name, in: pathVariables)
                 let value = context.map { TemplateEngine.render(template, in: $0) }
-                let holdsSecret = row.map { $0.isSecret && !$0.value.isEmpty && !RequestText.isPlaceholderOnly($0.value) } ?? false
-                let isSecret = holdsSecret || value?.usedSecret == true
+                let isSecret = PathVariables.holdsSecret(pathVariables.first { $0.key == occurrence.name })
+                    || value?.usedSecret == true
                 let isUnresolved = value.map { !$0.unresolved.isEmpty } ?? false
                 mark(
                     occurrence.nsRange, isSecret: isSecret, isUnresolved: isUnresolved,

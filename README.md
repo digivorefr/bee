@@ -37,7 +37,7 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 
 - A secret (a secret variable, an authorization credential, a row marked secret) is never encoded by the models: no workspace file, history entry, export or cURL command can contain its value.
 - Values live in `secrets.vault`, sealed with AES-256-GCM. The 256-bit key is one item in the login Keychain (`Bee Vault Key`, this device only).
-- Console lines, test results, the "Request sent" view and history are redacted before being shown or stored. A response that echoes a secret back is shown masked until revealed.
+- In the "Request sent" view and in history, a secret is masked where it was put in (path, parameters, headers, body text), whatever its length or encoding. Console lines, test results and error messages are searched for known secret values instead, which cannot catch a value shorter than 4 characters. A response that echoes a secret back is shown masked until revealed.
 - A script that copies a secret into another variable makes that variable secret too; turning a secret back into a plain value clears it unless the person just authenticated.
 - Revealing or copying a secret asks for Touch ID or the account password; a copied secret is marked concealed and cleared after a minute.
 - Rebuilding the app changes its signature: macOS then asks once to let the new build read `Bee Vault Key`.

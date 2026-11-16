@@ -82,7 +82,7 @@ public final class RequestRunner: Sendable {
         var response: HTTPResponse?
         var errorMessage: String?
         var wasCancelled = false
-        var resolved: ResolvedRequest?
+        var built: BuildOutput?
         var unresolved: [String] = []
         // Every scope snapshot and every value written to a secret, so masking covers values a
         // script replaced during the run.
@@ -119,10 +119,10 @@ public final class RequestRunner: Sendable {
             )
             let auth = RequestBuilder.effectiveAuth(for: item, folders: folders, collection: collection)
             do {
-                let built = try RequestBuilder.build(item: item, auth: auth, context: context, settings: input.settings)
-                resolved = built.request
-                unresolved = built.unresolvedVariables
-                response = try await transport.send(built.request)
+                let output = try RequestBuilder.build(item: item, auth: auth, context: context, settings: input.settings)
+                built = output
+                unresolved = output.unresolvedVariables
+                response = try await transport.send(output.request)
             } catch let error as TransportError {
                 wasCancelled = error == .cancelled
                 errorMessage = error.localizedDescription
@@ -167,7 +167,7 @@ public final class RequestRunner: Sendable {
 
         // 4. Mask every secret before anything is shown or kept.
         let redactor = Redactor(secrets: Self.secrets(
-            workspace: workspace, snapshots: scopeSnapshots, written: secretsWritten, resolved: resolved
+            workspace: workspace, snapshots: scopeSnapshots, written: secretsWritten, resolved: built?.request
         ))
         console = console.map { entry in
             var entry = entry
@@ -180,7 +180,7 @@ public final class RequestRunner: Sendable {
             test.message = test.message.map(redactor.redact)
             return test
         }
-        let sent = resolved.map { Self.sentRequest($0, redactor: redactor) }
+        let sent = built.map { Self.sentRequest($0, redactor: redactor) }
         let history = HistoryEntry(
             request: input.item,
             sourceRequestID: collection == nil ? nil : input.item.id,
@@ -365,16 +365,18 @@ public final class RequestRunner: Sendable {
         return values
     }
 
-    private static func sentRequest(_ request: ResolvedRequest, redactor: Redactor) -> SentRequest {
+    /// What is shown of the request that went out: the builder's masked twin (secrets hidden where they were
+    /// put in, whatever their length), then the redactor over it for anything a script or a variable carried.
+    private static func sentRequest(_ built: BuildOutput, redactor: Redactor) -> SentRequest {
         var preview: String?
-        if case .data(let data) = request.body, data.count <= bodyPreviewLimit,
-           let text = String(data: data, encoding: .utf8) {
+        if case .data(let data) = built.request.body, data.count <= bodyPreviewLimit,
+           let text = built.shownBody ?? String(data: data, encoding: .utf8) {
             preview = redactor.redact(text)
         }
         return SentRequest(
-            method: request.method,
-            url: redactor.redact(request.url.absoluteString),
-            headers: request.headers.map { HeaderEntry(name: $0.name, value: redactor.redact($0.value)) },
+            method: built.request.method,
+            url: redactor.redact(built.shownURL),
+            headers: built.shownHeaders.map { HeaderEntry(name: $0.name, value: redactor.redact($0.value)) },
             bodyPreview: preview
         )
     }

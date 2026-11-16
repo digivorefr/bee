@@ -23,11 +23,25 @@ public enum RequestBuildError: Error, Equatable, Sendable, LocalizedError {
 public struct BuildOutput: Sendable {
     /// The request with every placeholder replaced. Holds real secret values: never persist or log it.
     public var request: ResolvedRequest
+    /// The address as it may be drawn or kept. Every value that is or uses a secret (a secret row, a
+    /// credential, a secret variable) is replaced by `Redactor.mask` where it was put in, so a secret is
+    /// hidden whatever its length or its encoding.
+    public var shownURL: String
+    /// The headers, masked the same way.
+    public var shownHeaders: [HeaderEntry]
+    /// The body text, masked the same way, when the body is built from text; `nil` otherwise.
+    public var shownBody: String?
     /// Distinct names that stayed unresolved in the parts that are sent, in order of first appearance.
     public var unresolvedVariables: [String]
 
-    public init(request: ResolvedRequest, unresolvedVariables: [String] = []) {
+    public init(
+        request: ResolvedRequest, shownURL: String? = nil, shownHeaders: [HeaderEntry]? = nil,
+        shownBody: String? = nil, unresolvedVariables: [String] = []
+    ) {
         self.request = request
+        self.shownURL = shownURL ?? request.url.absoluteString
+        self.shownHeaders = shownHeaders ?? request.headers
+        self.shownBody = shownBody
         self.unresolvedVariables = unresolvedVariables
     }
 }
@@ -54,44 +68,64 @@ public enum RequestBuilder {
         guard !address.isEmpty else { throw .emptyURL }
 
         // Query rows, then an API key sent as a query parameter
-        var query: [(key: String, value: String)] = []
+        var query: [QueryPair] = []
         for row in item.queryParams where row.isEnabled {
-            let key = renderer.render(row.key).text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            query.append((key, renderer.render(row.value).text))
+            let key = renderer.render(row.key)
+            let name = key.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+            let value = renderer.render(row.value, isSecretSlot: row.isSecret)
+            query.append(QueryPair(
+                key: name, value: value.text,
+                shownKey: key.shown.trimmingCharacters(in: .whitespacesAndNewlines), shownValue: value.shown
+            ))
         }
 
         // Headers the person set, then the ones derived from the authorization and the body
         var headers: [HeaderEntry] = []
+        var shownHeaders: [HeaderEntry] = []
         for row in item.headers where row.isEnabled {
-            let name = cleanHeader(renderer.render(row.key).text)
+            let key = renderer.render(row.key)
+            let name = cleanHeader(key.text)
             guard !name.isEmpty else { continue }
-            headers.append(HeaderEntry(name: name, value: cleanHeader(renderer.render(row.value).text)))
+            let value = renderer.render(row.value, isSecretSlot: row.isSecret)
+            headers.append(HeaderEntry(name: name, value: cleanHeader(value.text)))
+            shownHeaders.append(HeaderEntry(name: cleanHeader(key.shown), value: cleanHeader(value.shown)))
         }
-        func addHeaderIfAbsent(_ name: String, _ value: String) {
+        func addHeaderIfAbsent(_ name: String, _ value: String, shown: String? = nil) {
             guard !headers.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { return }
             headers.append(HeaderEntry(name: name, value: value))
+            shownHeaders.append(HeaderEntry(name: name, value: shown ?? value))
         }
 
         switch auth.kind {
         case .inherit, .none:
             break
         case .bearer:
-            let token = cleanHeader(renderer.render(auth.bearerToken.value).text)
-            if !token.isEmpty { addHeaderIfAbsent("Authorization", "Bearer \(token)") }
+            let token = renderer.render(auth.bearerToken.value, isSecretSlot: true)
+            let clean = cleanHeader(token.text)
+            if !clean.isEmpty {
+                addHeaderIfAbsent("Authorization", "Bearer \(clean)", shown: "Bearer \(cleanHeader(token.shown))")
+            }
         case .basic:
             let user = renderer.render(auth.basicUsername).text
-            let password = renderer.render(auth.basicPassword.value).text
+            let password = renderer.render(auth.basicPassword.value, isSecretSlot: true).text
             if !user.isEmpty || !password.isEmpty {
-                addHeaderIfAbsent("Authorization", "Basic " + Data("\(user):\(password)".utf8).base64EncodedString())
+                addHeaderIfAbsent(
+                    "Authorization", "Basic " + Data("\(user):\(password)".utf8).base64EncodedString(),
+                    shown: "Basic " + Redactor.mask
+                )
             }
         case .apiKey:
             let name = cleanHeader(renderer.render(auth.apiKeyName).text)
-            let value = renderer.render(auth.apiKeyValue.value).text
-            if !name.isEmpty, !value.isEmpty {
+            let value = renderer.render(auth.apiKeyValue.value, isSecretSlot: true)
+            if !name.isEmpty, !value.text.isEmpty {
                 switch auth.apiKeyLocation {
-                case .header: addHeaderIfAbsent(name, cleanHeader(value))
-                case .query: if !query.contains(where: { $0.key == name }) { query.append((name, value)) }
+                case .header:
+                    addHeaderIfAbsent(name, cleanHeader(value.text), shown: cleanHeader(value.shown))
+                case .query:
+                    if !query.contains(where: { $0.key == name }) {
+                        query.append(QueryPair(key: name, value: value.text, shownKey: name, shownValue: value.shown))
+                    }
                 }
             }
         }
@@ -101,14 +135,46 @@ public enum RequestBuilder {
         addHeaderIfAbsent("User-Agent", "Bee/1.0")
         addHeaderIfAbsent("Accept", "*/*")
 
-        let url = try makeURL(address: address, query: query, usedSecret: renderedURL.usedSecret, template: item.url)
+        // The scheme is decided from the real address and written the same in what is shown.
+        let scheme = hasScheme(address) ? "" : (prefersPlainHTTP(address) ? "http://" : "https://")
+        let composed = compose(scheme + address, query: query.map { ($0.key, $0.value) })
+        guard let url = URL(string: composed),
+              let urlScheme = url.scheme?.lowercased(), urlScheme == "http" || urlScheme == "https",
+              let host = url.host(percentEncoded: true), !host.isEmpty
+        else {
+            throw .invalidURL(renderedURL.usedSecret ? item.url : address)
+        }
+        let composedShown = compose(
+            scheme + renderedURL.shown.trimmingCharacters(in: .whitespacesAndNewlines),
+            query: query.map { ($0.shownKey, $0.shownValue) }
+        )
+        // Without a secret, what is shown is the address exactly as it is sent.
+        let shownURL = composedShown == composed ? url.absoluteString : unmasked(composedShown)
+
         let request = ResolvedRequest(
             method: item.method.rawValue, url: url, headers: headers, body: body.body,
             timeout: item.settings.timeout ?? settings.timeout,
             followRedirects: item.settings.followRedirects ?? settings.followRedirects,
             verifyTLS: item.settings.verifyTLS ?? settings.verifyTLS
         )
-        return BuildOutput(request: request, unresolvedVariables: renderer.unresolved)
+        return BuildOutput(
+            request: request, shownURL: shownURL, shownHeaders: shownHeaders, shownBody: body.shown,
+            unresolvedVariables: renderer.unresolved
+        )
+    }
+
+    private struct QueryPair {
+        var key: String
+        var value: String
+        var shownKey: String
+        var shownValue: String
+    }
+
+    /// The mask comes out of the encoders percent-encoded: put it back as it is drawn.
+    private static let encodedMask = PercentCoding.encodeQuery(Redactor.mask)
+
+    private static func unmasked(_ text: String) -> String {
+        text.replacingOccurrences(of: encodedMask, with: Redactor.mask)
     }
 
     // MARK: Rendering
@@ -119,8 +185,15 @@ public enum RequestBuilder {
 
         init(context: VariableContext) { self.context = context }
 
-        mutating func render(_ template: String) -> RenderResult {
-            record(TemplateEngine.render(template, in: context))
+        /// - Parameter isSecretSlot: the template is the value of a secret row or of a credential field. Unless
+        ///   it only refers to variables (which then decide by themselves), what is shown of it is the mask.
+        mutating func render(_ template: String, isSecretSlot: Bool = false) -> RenderResult {
+            var result = record(TemplateEngine.render(template, in: context))
+            if isSecretSlot, !result.text.isEmpty, !TemplateEngine.isPlaceholderOnly(template) {
+                result.shown = Redactor.mask
+                result.usedSecret = true
+            }
+            return result
         }
 
         mutating func renderAddress(_ address: String, pathVariables: [KeyValue]) -> RenderResult {
@@ -140,10 +213,9 @@ public enum RequestBuilder {
 
     // MARK: URL
 
-    private static func makeURL(
-        address: String, query: [(key: String, value: String)], usedSecret: Bool, template: String
-    ) throws(RequestBuildError) -> URL {
-        var full = hasScheme(address) ? address : (prefersPlainHTTP(address) ? "http://" : "https://") + address
+    /// The address followed by the encoded query, before any fragment.
+    private static func compose(_ address: String, query: [(key: String, value: String)]) -> String {
+        var full = address
         if !query.isEmpty {
             let encoded = query.map { "\(PercentCoding.encodeQuery($0.key))=\(PercentCoding.encodeQuery($0.value))" }
             var fragment = ""
@@ -155,14 +227,7 @@ public enum RequestBuilder {
             full += separator + encoded.joined(separator: "&") + fragment
         }
         // An unresolved placeholder stays in the address: encode its braces so it is reported, not rejected.
-        let encodedBraces = full.replacingOccurrences(of: "{", with: "%7B").replacingOccurrences(of: "}", with: "%7D")
-        guard let url = URL(string: encodedBraces),
-              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = url.host(percentEncoded: true), !host.isEmpty
-        else {
-            throw .invalidURL(usedSecret ? template : address)
-        }
-        return url
+        return full.replacingOccurrences(of: "{", with: "%7B").replacingOccurrences(of: "}", with: "%7D")
     }
 
     private static func hasScheme(_ address: String) -> Bool {
@@ -208,6 +273,8 @@ public enum RequestBuilder {
     private struct BuiltBody {
         var body: ResolvedBody = .none
         var contentType: String?
+        /// The body text with secrets masked, for the modes built from text.
+        var shown: String?
     }
 
     private static func makeBody(_ body: RequestBody, renderer: inout Renderer) throws(RequestBuildError) -> BuiltBody {
@@ -215,17 +282,25 @@ public enum RequestBuilder {
         case .none:
             return BuiltBody()
         case .raw:
-            let text = renderer.render(body.raw).text
-            return BuiltBody(body: .data(Data(text.utf8)), contentType: body.rawLanguage.contentType)
+            let text = renderer.render(body.raw)
+            return BuiltBody(
+                body: .data(Data(text.text.utf8)), contentType: body.rawLanguage.contentType, shown: text.shown
+            )
         case .urlEncoded:
             var fields: [String] = []
+            var shownFields: [String] = []
             for row in body.urlEncoded where row.isEnabled {
-                let key = renderer.render(row.key).text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !key.isEmpty else { continue }
-                fields.append("\(PercentCoding.encodeForm(key))=\(PercentCoding.encodeForm(renderer.render(row.value).text))")
+                let key = renderer.render(row.key)
+                let name = key.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                let value = renderer.render(row.value, isSecretSlot: row.isSecret)
+                fields.append("\(PercentCoding.encodeForm(name))=\(PercentCoding.encodeForm(value.text))")
+                let shownName = key.shown.trimmingCharacters(in: .whitespacesAndNewlines)
+                shownFields.append("\(PercentCoding.encodeForm(shownName))=\(PercentCoding.encodeForm(value.shown))")
             }
             return BuiltBody(
-                body: .data(Data(fields.joined(separator: "&").utf8)), contentType: "application/x-www-form-urlencoded"
+                body: .data(Data(fields.joined(separator: "&").utf8)), contentType: "application/x-www-form-urlencoded",
+                shown: unmasked(shownFields.joined(separator: "&"))
             )
         case .formData:
             return try makeMultipart(body.formData, renderer: &renderer)
@@ -233,10 +308,13 @@ public enum RequestBuilder {
             let (path, url) = try existingFile(template: body.binaryPath, renderer: &renderer)
             return BuiltBody(body: .file(url), contentType: mimeType(forPath: path))
         case .graphQL:
-            let query = renderer.render(body.graphQLQuery).text
-            let variables = try graphQLVariables(renderer.render(body.graphQLVariables).text)
-            let json = "{\"query\":\(jsonString(query)),\"variables\":\(variables)}"
-            return BuiltBody(body: .data(Data(json.utf8)), contentType: "application/json")
+            let query = renderer.render(body.graphQLQuery)
+            let renderedVariables = renderer.render(body.graphQLVariables)
+            let variables = try graphQLVariables(renderedVariables.text)
+            let shownVariables = renderedVariables.shown.trimmingCharacters(in: .whitespacesAndNewlines)
+            let json = "{\"query\":\(jsonString(query.text)),\"variables\":\(variables)}"
+            let shown = "{\"query\":\(jsonString(query.shown)),\"variables\":\(shownVariables.isEmpty ? "{}" : shownVariables)}"
+            return BuiltBody(body: .data(Data(json.utf8)), contentType: "application/json", shown: shown)
         }
     }
 

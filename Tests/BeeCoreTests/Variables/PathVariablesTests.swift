@@ -6,12 +6,11 @@ import Testing
     private func names(_ address: String) -> [String] { PathVariables.names(in: address) }
 
     private func render(
-        _ address: String, rows: [KeyValue] = [], vars: [String: String] = [:], secrets: [String: String] = [:],
-        mask: String? = nil
+        _ address: String, rows: [KeyValue] = [], vars: [String: String] = [:], secrets: [String: String] = [:]
     ) -> RenderResult {
         let context = VariableContext(environment: vars.map { Variable(name: $0.key, value: $0.value) }
             + secrets.map { Variable(name: $0.key, value: $0.value, isSecret: true) })
-        return PathVariables.render(address, rows: rows, in: context, secretMask: mask)
+        return PathVariables.render(address, rows: rows, in: context)
     }
 
     // MARK: Detection
@@ -71,17 +70,58 @@ import Testing
         #expect(rows[1] == id)
     }
 
-    @Test func aRenamedVariableKeepsItsRow() {
+    @Test func aVariableRenamedByOneKeystrokeKeepsItsRow() {
         let row = KeyValue(key: "ticketId", value: "42", isSecret: true)
         for renamed in ["ticketI", "ticketIds", "ticketIx", "icketId"] {
-            let rows = PathVariables.rows(for: "/t/:\(renamed)", from: [row])
+            let rows = PathVariables.rows(for: "/t/:\(renamed)/x", from: [row], renamedFrom: "/t/:ticketId/x")
             #expect(rows.count == 1)
             #expect(rows[0].id == row.id)
             #expect(rows[0].key == renamed)
             #expect(rows[0].value == "42")
         }
-        // Another name altogether is another variable.
-        #expect(PathVariables.rows(for: "/t/:userId", from: [row])[0].id != row.id)
+    }
+
+    @Test func nothingIsCarriedToAnotherVariable() {
+        let row = KeyValue(key: "id", value: "s3cr3t-value", isSecret: true)
+        // Without the address it came from, a name one letter away is still another variable (an import).
+        #expect(PathVariables.rows(for: "/t/:pid", from: [row])[0].id != row.id)
+        // A pasted address is not a rename, however close the names are.
+        let pasted = PathVariables.rows(for: "https://other.example/items/:pid", from: [row], renamedFrom: "https://h/t/:id")
+        #expect(pasted[0].id != row.id)
+        #expect(pasted[0].value.isEmpty)
+        // One keystroke that splits a name does not rename it either.
+        let split = PathVariables.rows(for: "/t/:tick/etId", from: [KeyValue(key: "ticketId", value: "42")], renamedFrom: "/t/:ticketId")
+        #expect(split.map(\.value) == [""])
+        // Nor does a keystroke elsewhere in the address make a new name inherit a row.
+        let other = PathVariables.rows(for: "/t/:id/:i", from: [row], renamedFrom: "/t/:id/:")
+        #expect(other.map(\.key) == ["id", "i"])
+        #expect(other[1].value.isEmpty)
+    }
+
+    @Test func aRowWhoseNameLeavesTheAddressIsSetAsideAndComesBack() {
+        let row = KeyValue(key: "ticketId", value: "42", isSecret: true)
+        // A stray `#` hides the path variable for one keystroke.
+        var state = PathVariables.reconcile(stored: [row], aside: [], address: "/us#ers/:ticketId", previous: "/users/:ticketId")
+        #expect(state.stored.isEmpty)
+        #expect(state.aside == [row])
+        state = PathVariables.reconcile(stored: state.stored, aside: state.aside, address: "/users/:ticketId", previous: "/us#ers/:ticketId")
+        #expect(state.stored == [row])
+        #expect(state.aside.isEmpty)
+
+        // Cut, then pasted elsewhere in the address.
+        state = PathVariables.reconcile(stored: [row], aside: [], address: "/users", previous: "/users/:ticketId")
+        state = PathVariables.reconcile(stored: state.stored, aside: state.aside, address: "/:ticketId/users", previous: "/users")
+        #expect(state.stored == [row])
+
+        // A row set aside is never given to another name, even one keystroke away.
+        state = PathVariables.reconcile(stored: [], aside: [row], address: "/users/:ticketI", previous: "/users/:ticket")
+        #expect(state.stored.isEmpty)
+        #expect(state.aside == [row])
+
+        // A newer row of the same name replaces the one set aside.
+        let newer = KeyValue(key: "ticketId", value: "43")
+        state = PathVariables.reconcile(stored: [newer], aside: [row], address: "/users", previous: "/users/:ticketId")
+        #expect(state.aside == [newer])
     }
 
     @Test func onlyRowsThatSaySomethingAreStored() {
@@ -133,20 +173,30 @@ import Testing
         #expect(render("https://h/:id/copy/:id", rows: [KeyValue(key: "id", value: "5")]).text == "https://h/5/copy/5")
     }
 
-    @Test func secretsAreReportedAndMaskedOnRequest() {
-        let secretRow = [KeyValue(key: "token", value: "s3cr3t-value", isSecret: true)]
-        let sent = render("https://h/reset/:token", rows: secretRow)
-        #expect(sent.text == "https://h/reset/s3cr3t-value")
+    @Test func secretsAreReportedAndMaskedInWhatIsShown() {
+        // Short on purpose: a secret is masked where it is put in, not by looking for its value.
+        let secretRow = [KeyValue(key: "pin", value: "12", isSecret: true)]
+        let sent = render("https://h/reset/:pin/done", rows: secretRow)
+        #expect(sent.text == "https://h/reset/12/done")
+        #expect(sent.shown == "https://h/reset/••••••/done")
         #expect(sent.usedSecret)
-        #expect(render("https://h/reset/:token", rows: secretRow, mask: "••••••").text == "https://h/reset/••••••")
 
-        let viaVariable = render("https://h/reset/:token", secrets: ["token": "s3cr3t-value"], mask: "••••••")
-        #expect(viaVariable.text == "https://h/reset/••••••")
+        let viaVariable = render("{{base}}/reset/:pin", vars: ["base": "https://h"], secrets: ["pin": "7"])
+        #expect(viaVariable.text == "https://h/reset/7")
+        #expect(viaVariable.shown == "https://h/reset/••••••")
         #expect(viaVariable.usedSecret)
 
         // A secret row that only refers to a plain variable hides nothing.
-        let reference = [KeyValue(key: "token", value: "{{plain}}", isSecret: true)]
-        #expect(render("https://h/reset/:token", rows: reference, vars: ["plain": "abc"], mask: "••••••").text == "https://h/reset/abc")
+        let reference = [KeyValue(key: "pin", value: "{{plain}}", isSecret: true)]
+        #expect(render("https://h/reset/:pin", rows: reference, vars: ["plain": "abc"]).shown == "https://h/reset/abc")
+    }
+
+    @Test func aValueOfSpacesIsNoValue() {
+        let rows = [KeyValue(key: "id", value: "   ")]
+        #expect(PathVariables.valueTemplate(for: "id", in: rows) == "{{id}}")
+        #expect(render("https://h/:id", rows: rows, vars: ["id": "9"]).text == "https://h/9")
+        #expect(PathVariables.valueTemplate(for: "id", in: [KeyValue(key: "id", value: " 42 ")]) == "42")
+        #expect(!PathVariables.holdsSecret(KeyValue(key: "id", value: "  ", isSecret: true)))
     }
 
     @Test func substitutingReplacesEachSegment() {
@@ -195,12 +245,58 @@ import Testing
         let item = RequestItem(
             url: "{{baseUrl}}/orgs/:org/tickets/:ticketId/reset/:token",
             pathVariables: [
-                KeyValue(key: "org", value: "acme corp"),
+                KeyValue(key: "org", value: " acme corp "),
                 KeyValue(key: "token", value: "s3cr3t-value", isSecret: true),
             ]
         )
         let command = CurlCodec.command(for: item, auth: AuthConfig(kind: .none))
+        // The same trimmed value as the one that is sent.
         #expect(command == "curl '{{baseUrl}}/orgs/acme%20corp/tickets/{{ticketId}}/reset/<secret>'")
+    }
+
+    @Test func whatIsShownOfARequestHidesSecretsOfAnyLength() throws {
+        let item = RequestItem(
+            method: .post,
+            url: "https://api.example.com/reset/:pin?fixed=1",
+            pathVariables: [KeyValue(key: "pin", value: "123", isSecret: true)],
+            queryParams: [
+                KeyValue(key: "code", value: "77", isSecret: true),
+                KeyValue(key: "via", value: "{{otp}}"),
+                KeyValue(key: "plain", value: "a b"),
+            ],
+            headers: [KeyValue(key: "X-Pin", value: "99", isSecret: true), KeyValue(key: "X-Plain", value: "ok")],
+            auth: AuthConfig(kind: .apiKey, apiKeyName: "k", apiKeyValue: SecretField(value: "zz"), apiKeyLocation: .query),
+            body: RequestBody(mode: .raw, raw: "{\"otp\": \"{{otp}}\", \"at\": {{$timestamp}}}")
+        )
+        let context = VariableContext(environment: [Variable(name: "otp", value: "55", isSecret: true)])
+        let output = try RequestBuilder.build(item: item, auth: item.auth, context: context, settings: AppSettings())
+
+        #expect(output.request.url.absoluteString == "https://api.example.com/reset/123?fixed=1&code=77&via=55&plain=a%20b&k=zz")
+        #expect(output.shownURL == "https://api.example.com/reset/••••••?fixed=1&code=••••••&via=••••••&plain=a%20b&k=••••••")
+        #expect(output.shownHeaders.first { $0.name == "X-Pin" }?.value == "••••••")
+        #expect(output.shownHeaders.first { $0.name == "X-Plain" }?.value == "ok")
+        #expect(output.request.headers.first { $0.name == "X-Pin" }?.value == "99")
+
+        // The body is rendered once: the dynamic value is the same in what is sent and in what is shown.
+        guard case .data(let data) = output.request.body else {
+            Issue.record("expected a data body")
+            return
+        }
+        let sent = String(decoding: data, as: UTF8.self)
+        #expect(sent.contains("\"otp\": \"55\""))
+        #expect(output.shownBody == sent.replacingOccurrences(of: "\"55\"", with: "\"••••••\""))
+    }
+
+    @Test func withoutSecretsWhatIsShownIsWhatIsSent() throws {
+        let item = RequestItem(
+            url: "example.com/a b/:id", pathVariables: [KeyValue(key: "id", value: "x/y")],
+            queryParams: [KeyValue(key: "q", value: "é")],
+            auth: AuthConfig(kind: .basic, basicUsername: "u", basicPassword: SecretField(value: "p"))
+        )
+        let output = try RequestBuilder.build(item: item, auth: item.auth, context: VariableContext(), settings: AppSettings())
+        #expect(output.shownURL == output.request.url.absoluteString)
+        #expect(output.shownHeaders.first { $0.name == "Authorization" }?.value == "Basic ••••••")
+        #expect(output.shownHeaders.count == output.request.headers.count)
     }
 
     @Test func postmanPathVariablesAreImported() throws {

@@ -95,6 +95,10 @@ final class RequestSession: Identifiable {
     var addedRequestSections: Set<RequestSection> = []
     var expandedResponseSections: Set<ResponseSection> = [.body, .tests, .variablesSet]
 
+    /// Path variable rows whose name left the address while this request was open. They come back
+    /// with their value if the name does (an undo, a cut then paste); they are never saved.
+    @ObservationIgnored private var retiredPathVariables: [KeyValue] = []
+
     @ObservationIgnored var task: Task<Void, Never>?
     @ObservationIgnored var onChange: ((RequestSession) -> Void)?
 
@@ -103,6 +107,16 @@ final class RequestSession: Identifiable {
         self.item = item
         self.collectionID = collectionID
         expandedRequestSections = Set(RequestSection.allCases.filter { $0 != .settings })
+    }
+
+    /// The path variable rows to keep once the address becomes `address`. A row follows its variable
+    /// through a rename typed one character at a time; a row whose name is gone is set aside.
+    func pathVariables(for address: String) -> [KeyValue] {
+        let result = PathVariables.reconcile(
+            stored: item.pathVariables, aside: retiredPathVariables, address: address, previous: item.url
+        )
+        retiredPathVariables = result.aside
+        return result.stored
     }
 
     /// True when the request has content for the part.
@@ -649,7 +663,11 @@ final class AppModel {
             session.sendStartedAt = nil
             session.task = nil
             session.shownResponse = shown
-            session.hidesEchoedSecrets = shown != outcome.response
+            session.hidesEchoedSecrets = shown?.headers != outcome.response?.headers
+                || shown?.body != outcome.response?.body
+            // The address a response came from can carry a secret (a path variable, a parameter):
+            // it is then never used to name a saved file.
+            if let sent = outcome.sentRequest?.url, sent.contains(Redactor.mask) { session.shownResponse?.finalURL = nil }
             session.outcome = outcome
             session.receivedAt = Date()
             session.sentEnvironmentName = environmentName
@@ -668,6 +686,9 @@ final class AppModel {
     /// textual body. Binary bodies are left as received.
     nonisolated static func masking(_ response: HTTPResponse?, with redactor: Redactor) -> HTTPResponse? {
         guard var response, !redactor.isEmpty else { return response }
+        if let address = response.finalURL?.absoluteString, redactor.redact(address) != address {
+            response.finalURL = nil
+        }
         response.headers = response.headers.map { HeaderEntry(name: $0.name, value: redactor.redact($0.value)) }
         if !response.body.prefix(1024).contains(0), let text = String(data: response.body, encoding: .utf8) {
             let masked = redactor.redact(text)

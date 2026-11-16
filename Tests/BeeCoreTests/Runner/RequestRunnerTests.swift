@@ -77,6 +77,25 @@ private func jsonResponse(_ body: String, status: Int = 200) -> HTTPResponse {
         #expect(!history.contains(secret))
     }
 
+    @Test func aShortSecretInThePathNeverReachesWhatIsShownOrKept() async throws {
+        var request = RequestItem(name: "Reset", url: "{{baseUrl}}/reset/:pin/users/:user")
+        request.pathVariables = [KeyValue(key: "pin", value: "123", isSecret: true), KeyValue(key: "user", value: "ada")]
+        request.queryParams = [KeyValue(key: "otp", value: "45", isSecret: true)]
+        let transport = RecordingTransport { _ in jsonResponse("{}") }
+
+        let (outcome, _, _) = await run(request, transport: transport)
+
+        #expect(transport.requests.first?.url.absoluteString == "https://api.example.test/reset/123/users/ada?otp=45")
+        #expect(outcome.sentRequest?.url == "https://api.example.test/reset/••••••/users/ada?otp=••••••")
+        #expect(outcome.historyEntry.resolvedURL == "https://api.example.test/reset/••••••/users/ada?otp=••••••")
+        let history = String(decoding: try JSONEncoder().encode(outcome.historyEntry), as: UTF8.self)
+        // Exact fields: random identifiers may hold the same digits.
+        #expect(!history.contains("\"value\":\"123\""))
+        #expect(!history.contains("\"value\":\"45\""))
+        #expect(!history.contains("reset/123"))
+        #expect(!history.contains("otp=45"))
+    }
+
     @Test func consoleAndTestsAreRedacted() async {
         var request = RequestItem(name: "Leaky", url: "{{baseUrl}}/leak")
         request.postResponseScript = """

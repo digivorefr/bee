@@ -225,7 +225,9 @@ private struct PairsSummary: View {
 
     private func line(_ sent: [KeyValue], limit: Int) -> some View {
         HStack(spacing: Theme.Space.l) {
-            ForEach(sent.prefix(limit)) { row in
+            // By position: a summary line has no row to keep track of, and a path variable that has no
+            // value yet has no lasting identifier.
+            ForEach(Array(sent.prefix(limit).enumerated()), id: \.offset) { _, row in
                 HStack(spacing: Theme.Space.s) {
                     Text(row.key)
                         .font(Theme.mono())
