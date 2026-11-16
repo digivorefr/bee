@@ -54,6 +54,26 @@ import Testing
         #expect(output.failure?.message.isEmpty == false)
     }
 
+    @Test func intervalsRepeatUntilCleared() async {
+        let output = await ScriptHarness.run("""
+        let ticks = 0;
+        await new Promise(resolve => {
+          const id = setInterval(() => {
+            ticks += 1;
+            if (ticks === 3) { clearInterval(id); resolve(); }
+          }, 5);
+        });
+        console.log(ticks);
+        """)
+        #expect(output.failure == nil)
+        #expect(output.console.first?.message == "3")
+    }
+
+    @Test func anIntervalNeverClearedEndsAtTheTimeLimit() async {
+        let output = await ScriptHarness.run("setInterval(() => {}, 5);", timeout: 0.3)
+        #expect(output.failure != nil)
+    }
+
     @Test func rejectedPromisesAndNonErrorThrowsAreReported() async {
         let rejected = await ScriptHarness.run("await Promise.reject(new Error('rejected'))")
         #expect(rejected.failure?.message == "rejected")

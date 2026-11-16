@@ -60,6 +60,18 @@ import Testing
         Case("bee.expect(9).to.be.within(1, 5)", "expected 9 to be within 1..5"),
         Case("bee.expect('a').to.be.above(1)", "expected 'a' to be a number to use above()"),
 
+        Case("bee.expect(() => { throw new TypeError('bad id') }).to.throw()"),
+        Case("bee.expect(() => { throw new TypeError('bad id') }).to.throw(TypeError)"),
+        Case("bee.expect(() => { throw new TypeError('bad id') }).to.throw('bad')"),
+        Case("bee.expect(() => { throw new TypeError('bad id') }).to.throw(TypeError, /id$/)"),
+        Case("bee.expect(() => { throw 'plain' }).to.throws(/^plain$/)"),
+        Case("bee.expect(() => 1).to.not.throw()"),
+        Case("bee.expect(() => 1).to.throw()", "expected the function to throw an error but nothing was thrown"),
+        Case("bee.expect(() => { throw new Error('boom') }).to.throw(TypeError)", "expected the function to throw TypeError but 'boom' was thrown"),
+        Case("bee.expect(() => { throw new Error('boom') }).to.throw('bang')", "expected the function to throw an error matching 'bang' but 'boom' was thrown"),
+        Case("bee.expect(() => { throw new Error('boom') }).to.not.throw()", "expected the function to not throw an error"),
+        Case("bee.expect(1).to.throw()", "expected 1 to be a function to use throw()"),
+
         Case("bee.expect('hello').to.include('ell')"), Case("bee.expect([1, 2, 3]).to.contain(2)"),
         Case("bee.expect({a: 1, b: 2}).to.include({a: 1})"), Case("bee.expect([{a: 1}]).to.deep.include({a: 1})"),
         Case("bee.expect('abc').to.not.include('z')"),

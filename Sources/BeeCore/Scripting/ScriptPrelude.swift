@@ -259,6 +259,37 @@ enum ScriptPrelude {
       return this;
     }
 
+    /** `expected`: an error class, a message (string or RegExp), or nothing; `pattern` narrows a class. */
+    throw(expected, pattern) {
+      const target = this._object;
+      if (typeof target !== 'function') {
+        throw new AssertionError('expected ' + describe(target) + ' to be a function to use throw()');
+      }
+      let thrown;
+      let didThrow = false;
+      try { target(); } catch (error) { didThrow = true; thrown = error; }
+      const messageMatches = function (wanted) {
+        const message = messageOf(thrown);
+        if (wanted instanceof RegExp) { wanted.lastIndex = 0; return wanted.test(message); }
+        return message.indexOf(String(wanted)) !== -1;
+      };
+      let passed = didThrow;
+      let phrase = 'throw an error';
+      if (typeof expected === 'function') {
+        phrase = 'throw ' + (expected.name || 'the given error');
+        passed = didThrow && thrown instanceof expected && (pattern === undefined || messageMatches(pattern));
+        if (pattern !== undefined) phrase += ' matching ' + describe(pattern);
+      } else if (expected !== undefined) {
+        phrase = 'throw an error matching ' + describe(expected);
+        passed = didThrow && messageMatches(expected);
+      }
+      this._assert(
+        passed, phrase, didThrow ? ' but ' + describe(messageOf(thrown)) + ' was thrown' : ' but nothing was thrown',
+        'the function'
+      );
+      return this;
+    }
+
     match(pattern) {
       const target = this._object;
       let passed = false;
@@ -366,7 +397,7 @@ enum ScriptPrelude {
     equals: 'equal', eq: 'equal', eqls: 'eql', an: 'a', instanceOf: 'instanceof',
     gt: 'above', greaterThan: 'above', gte: 'least', lt: 'below', lessThan: 'below', lte: 'most',
     includes: 'include', contain: 'include', contains: 'include', length: 'lengthOf',
-    matches: 'match', key: 'keys', exists: 'exist'
+    matches: 'match', key: 'keys', exists: 'exist', throws: 'throw', Throw: 'throw'
   };
   Object.keys(aliases).forEach(function (alias) {
     const original = Object.getOwnPropertyDescriptor(Assertion.prototype, aliases[alias]);
@@ -673,6 +704,18 @@ enum ScriptPrelude {
     return id;
   }
 
+  function setIntervalShim(callback, delay) {
+    if (typeof callback !== 'function') throw new TypeError('setInterval needs a function as its first argument');
+    let milliseconds = Number(delay);
+    // Never a busy loop: an interval waits at least one millisecond.
+    if (!(milliseconds >= 1)) milliseconds = 1;
+    if (milliseconds > 2147483647) milliseconds = 2147483647;
+    const id = nextTimerId++;
+    timers.set(id, { callback: callback, args: Array.prototype.slice.call(arguments, 2), interval: milliseconds });
+    host.timerSet(id, milliseconds);
+    return id;
+  }
+
   function clearTimeoutShim(id) {
     if (timers.delete(id)) host.timerClear(id);
   }
@@ -680,7 +723,9 @@ enum ScriptPrelude {
   function fireTimer(id) {
     const timer = timers.get(id);
     if (timer === undefined) return;
-    timers.delete(id);
+    // An interval is armed again before its callback runs, so the callback may clear it.
+    if (timer.interval === undefined) timers.delete(id);
+    else host.timerSet(id, timer.interval);
     timer.callback.apply(undefined, timer.args);
   }
 
@@ -859,6 +904,8 @@ enum ScriptPrelude {
   globalThis.console = makeConsole();
   globalThis.setTimeout = setTimeoutShim;
   globalThis.clearTimeout = clearTimeoutShim;
+  globalThis.setInterval = setIntervalShim;
+  globalThis.clearInterval = clearTimeoutShim;
   globalThis.require = unavailable('require');
   globalThis.btoa = function btoa(text) {
     const encoded = host.btoa(String(text));
