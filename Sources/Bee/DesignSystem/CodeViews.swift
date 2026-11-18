@@ -31,7 +31,7 @@ struct CodeEditor: View {
     var body: some View {
         CodeTextArea(
             text: $text, language: language, variables: context, isEditable: true, wraps: true,
-            showsLineNumbers: showsLineNumbers, onFocusChange: { isFocused = $0 },
+            showsLineNumbers: showsLineNumbers, growsUpTo: maxHeight, onFocusChange: { isFocused = $0 },
             onContentHeight: { if contentHeight != $0 { contentHeight = $0 } }
         )
         .frame(height: min(max(contentHeight ?? estimatedHeight, minHeight), maxHeight))
@@ -81,6 +81,9 @@ struct CodeTextArea: NSViewRepresentable {
     let isEditable: Bool
     let wraps: Bool
     let showsLineNumbers: Bool
+    /// Set for an area that takes the height of its text: the height above which it scrolls instead.
+    /// `nil` for an area that fills the space it is given.
+    var growsUpTo: CGFloat?
     var onFocusChange: (Bool) -> Void = { _ in }
     var onContentHeight: (CGFloat) -> Void = { _ in }
 
@@ -97,6 +100,12 @@ struct CodeTextArea: NSViewRepresentable {
             coordinator?.parent.onFocusChange(focused)
         }
         container.onGeometryChange = { [weak coordinator] in coordinator?.reportHeight() }
+        if growsUpTo != nil {
+            // An area that grows with its text shows its scroller only once it has stopped growing
+            // (see `reportHeight`), never because its frame is a step behind its text.
+            container.scrollView.autohidesScrollers = false
+            container.scrollView.hasVerticalScroller = false
+        }
         if isEditable, variables != nil {
             container.textView.completionNames = { [weak coordinator] in
                 TokenStyler.completionNames(in: coordinator?.parent.variables)
@@ -313,6 +322,17 @@ struct CodeTextArea: NSViewRepresentable {
             layoutManager.ensureLayout(for: textContainer)
             let used = layoutManager.usedRect(for: textContainer).height
             let height = ceil(max(used, WireMetrics.lineHeight(Theme.Size.body))) + 2 * container.textView.textContainerInset.height
+            if let limit = parent.growsUpTo {
+                // A scroller that takes room narrows the text, which rewraps it and changes its height.
+                // Left to hide and show by itself, it appeared each time the frame was a step behind the
+                // text, and the two chased each other for ever. It is now tied to the one fact that does
+                // not go back and forth: narrowing never makes a text shorter, so a text too tall for the
+                // area stays too tall with the scroller, and one that fits with it fits without it.
+                let needsScroller = height > limit + 0.5
+                if container.scrollView.hasVerticalScroller != needsScroller {
+                    container.scrollView.hasVerticalScroller = needsScroller
+                }
+            }
             guard height != reportedHeight else { return }
             reportedHeight = height
             Task { [weak self] in self?.parent.onContentHeight(height) }
@@ -393,6 +413,9 @@ final class CodeContainerView: NSView {
         if wraps == true, textView.frame.width != scrollView.contentSize.width {
             textView.setFrameSize(NSSize(width: scrollView.contentSize.width, height: textView.frame.height))
         }
+        // When the area shrinks, the text view would keep its former height until its text changes:
+        // a document taller than what it holds, which scrolls for nothing.
+        textView.sizeToFit()
         gutter.needsDisplay = true
     }
 

@@ -19,6 +19,7 @@ import SwiftUI
 ///     click:<x>,<y>   doubleclick:<x>,<y>   type:<text>   selectall   key:return|tab|escape|delete   focus
 ///     cmd:<key>   windowshot:<png path>   front
 ///     menu:<menu item title>     shot:<window title>|<png path>
+///     raw:<body text, \n for a line break>      probe:<samples> (logs the geometry of each editor over time)
 ///
 /// Clicks and shortcuts reach SwiftUI controls only when the app is frontmost: start it with
 /// `open -n dist/Bee.app --env BEE_SCENARIO=… --env BEE_HARNESS_LOG=<file>`.
@@ -223,6 +224,34 @@ enum DebugHarness {
             }
             try? await Task.sleep(for: .milliseconds(350))
             snapshot(to: parts[1], window: window)
+        case "raw":
+            guard let session = currentSession(model) else { return log("raw: no request selected") }
+            session.item.body.mode = .raw
+            session.item.body.raw = argument.replacingOccurrences(of: "\\n", with: "\n")
+        case "probe":
+            // One line per sample: for each editor, its height, the width its text has, whether its
+            // scroller shows, and how many rows the text is laid out on.
+            var previous = ""
+            for sample in 0..<(Int(argument) ?? 20) {
+                var editors: [String] = []
+                func visit(_ view: NSView) {
+                    if let code = view as? CodeContainerView, code.textView.isEditable {
+                        var rows = 0
+                        if let layout = code.textView.layoutManager, let container = code.textView.textContainer {
+                            let glyphs = layout.glyphRange(for: container)
+                            layout.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, _, _ in rows += 1 }
+                        }
+                        let scroller = code.scrollView.verticalScroller.map { !$0.isHidden } ?? false
+                        editors.append("h=\(Int(code.frame.height)) w=\(Int(code.scrollView.contentSize.width)) doc=\(Int(code.textView.frame.height)) scroller=\(scroller) rows=\(rows)")
+                    }
+                    view.subviews.forEach(visit)
+                }
+                if let root = mainWindow()?.contentView { visit(root) }
+                let line = editors.joined(separator: " | ")
+                if line != previous { log("probe \(sample): \(line)") }
+                previous = line
+                try? await Task.sleep(for: .milliseconds(40))
+            }
         case "focus":
             let window = mainWindow()
             log("first responder: \(String(describing: window?.firstResponder)) key: \(window?.isKeyWindow ?? false) active: \(NSApp.isActive)")
