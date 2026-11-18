@@ -8,6 +8,8 @@ import SwiftUI
 /// scene value: menus are not rebuilt when the model changes, they are when this value does.
 struct ShellFocus: Equatable {
     var hasRequest: Bool
+    var canFork: Bool
+    var isFork: Bool
     var hasCollection: Bool
     var canAddFolder: Bool
     var responseLayout: ResponseLayout
@@ -28,6 +30,8 @@ extension AppModel {
     var shellFocus: ShellFocus {
         ShellFocus(
             hasRequest: selectedRequestID != nil,
+            canFork: forkableRequestID != nil,
+            isFork: selectedFork != nil,
             hasCollection: selectedCollectionID != nil,
             canAddFolder: newFolderTarget != nil,
             responseLayout: settings.responseLayout
@@ -72,6 +76,14 @@ struct BeeCommands: Commands {
             Button("Delete") { deleteSelectedRequest() }
                 .keyboardShortcut(.delete)
                 .disabled(focus?.hasRequest == false)
+            Divider()
+            Button("Fork") { forkSelectedRequest() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(focus?.canFork == false)
+            Button("Merge Fork into Original…") {
+                if let fork = model.selectedFork { ShellState.shared.mergingFork = fork.id }
+            }
+            .disabled(focus?.isFork != true)
         }
 
         CommandGroup(after: .appInfo) {
@@ -107,6 +119,14 @@ struct BeeCommands: Commands {
         Binding(get: { shown }, set: { model.settings.responseLayout = $0 })
     }
 
+    private func forkSelectedRequest() {
+        guard let id = model.forkableRequestID else {
+            model.inform("Select a request kept in a collection to fork it.")
+            return
+        }
+        model.forkRequest(id)
+    }
+
     private func duplicateSelectedRequest() {
         guard let id = model.selectedRequestID else {
             model.inform("Select a request to duplicate it.")
@@ -127,6 +147,11 @@ struct BeeCommands: Commands {
             model.inform("Select a request to delete it.")
             return
         }
-        model.deleteNode(id)
+        // A fork that changed something is not thrown away on one keystroke.
+        if let fork = model.fork(id: id) {
+            ShellActions.discardFork(fork, model: model)
+            return
+        }
+        ShellActions.deleteRequest(id, name: model.session(for: id)?.item.name ?? "", model: model)
     }
 }

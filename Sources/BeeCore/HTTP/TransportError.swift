@@ -48,6 +48,9 @@ public enum TransportError: Error, Equatable, Sendable, LocalizedError {
             )
         case .clientCertificateRequired, .clientCertificateRejected:
             return .secureConnectionFailed("\(host) requires a client certificate.")
+        case .dataLengthExceedsMaximum:
+            // What URLSession answers to a GET or HEAD that carries a body.
+            return .other("macOS refused to send this request with its body. Remove the body, or use a method that carries one, such as POST.")
         case .badServerResponse, .cannotParseResponse, .cannotDecodeRawData, .cannotDecodeContentData:
             return .other("The server sent a response that could not be read.")
         default:

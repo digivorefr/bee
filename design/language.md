@@ -14,6 +14,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 - Request sections, wire order: Path variables, Parameters, Authorization, Headers, Body, Pre-request script, Post-response script, Settings. Path variables follow the URL: the section is there when the URL has `:name` segments, and can be neither added nor removed.
 - Response: status line (Status · Time · Size) is its headline; then Headers, Body, Tests, Variables set, Console, Request sent.
 - **Sidebar** (system glass): New request, Collections (tree), Environments (active one marked `Active`), History. Methods are quiet monochrome capitals.
+- **Forks** stand under their original in the sidebar. A fork's page has the request line, then one line that says whose fork it is and what it changes, with Merge and Discard.
 - **Toolbar**: title + breadcrumb leading; the Environment capsule trailing. Nothing else.
 - One request at a time; the sidebar is the navigation. Edits save themselves: no dirty state, no Save.
 
@@ -24,6 +25,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 - **Two inks** on paper: primary and secondary label colors. **Honey `#F2B90C`** marks what is live: it fills Send (ink text on it), the cell of the active environment, and the comb while a request is in flight; its deep step `#8A5A00` (light) / `#F2B90C` (dark) is the focus ring and caret.
 - **The cell.** Bee's one mark is a hexagon standing on a point. A capped cell (filled, a glyph cut in paper) says how a status or a test turned out; a collection is a cell in the sidebar; the comb is cells. No circles, badges or pills beside it.
 - **The comb** is drawn only where there is nothing to read: the response page before the first send and while sending, and the page when nothing is selected. It grows from the bottom trailing corner and fades toward the text; a few cells hold honey. It never sits behind content.
+- **Fork ground.** A fork is told from the request of the collection at a glance: its whole page is on blueprint paper (`#F1F5FB` / `#1A2029` dark) with a 3 pt rule down its leading edge, and its mark is an empty cell in blueprint ink (`#33568A` / `#8FB4E8`). The original that has forks keeps a full cell. Blueprint is used for nothing else.
 - **Status colors** only on status and test marks, always with a glyph and words: positive `#1A7F37` / `#3FB950` dark, warning `#9A6700` / `#D29922`, negative `#C6372B` / `#F85149`. A 418 gets a cup.
 - **Outline rule.** 1 px outline, radius 8, around what can be written or pressed (fields, editors, pop-ups, secondary buttons). Nothing around what is read. No separators on the paper except the hairline between the two pages; grouping by space.
 - **Spacing** 4 · 8 · 12 · 16 · 24 · 32. 24 between sections, 8 from a heading to its content, page inset 24.
@@ -40,7 +42,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 
 ## Lexicon (interface copy, English)
 
-Request · Method · URL · Path variable · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
+Request · Fork (Merge / Discard / Original) · Method · URL · Path variable · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
 
 Sentence case everywhere. Verbs on buttons. Errors say what happened and what to do.
 

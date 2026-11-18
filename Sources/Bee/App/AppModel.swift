@@ -253,6 +253,9 @@ final class AppModel {
         let loaded = await store.load()
         workspace = loaded.isFirstLaunch ? SampleData.workspace() : loaded.workspace
         vaultState = loaded.vaultState
+        // Forks catch up with what their originals became. Not while secrets are locked: blank values
+        // would make a secret the fork changed look untouched.
+        if !isVaultLocked { workspace.forksFollowOriginals() }
         settings = await store.loadSettings()
         history = await store.loadHistory()
         isLoaded = true
@@ -343,6 +346,7 @@ final class AppModel {
         vaultState = state
         if state == .unlocked {
             workspace = hydrated
+            workspace.forksFollowOriginals()
             for session in sessions.values { refresh(session) }
             scheduleSave()
         }
@@ -364,6 +368,10 @@ final class AppModel {
         if let draft = workspace.scratchRequests.first(where: { $0.id == requestID }) {
             return (draft, nil)
         }
+        // A fork lives where its original does.
+        if let fork = workspace.fork(id: requestID) {
+            return (fork.item, workspace.collection(containing: fork.originID)?.id)
+        }
         for collection in workspace.collections {
             if let item = collection.request(id: requestID) { return (item, collection.id) }
         }
@@ -380,13 +388,22 @@ final class AppModel {
                 session.onChange = handler
             }
         }
+        var followers: [UUID] = []
+        let isLocked = isVaultLocked
         mutate { workspace in
+            if workspace.updateFork(session.item) { return }
             if let collectionID = session.collectionID,
                let index = workspace.collections.firstIndex(where: { $0.id == collectionID }) {
                 workspace.collections[index].update(session.item)
+                // The forks of this request follow it for the parts they have not changed. With secrets
+                // locked, what a fork changed cannot be told: nothing follows until they are read.
+                if !isLocked { followers = workspace.forksFollow(session.item) }
             } else if let index = workspace.scratchRequests.firstIndex(where: { $0.id == session.id }) {
                 workspace.scratchRequests[index] = session.item
             }
+        }
+        for id in followers {
+            if let follower = sessions[id] { refresh(follower) }
         }
     }
 
@@ -482,8 +499,9 @@ final class AppModel {
                 addDraft(item)
             }
         case .request(let id):
-            if let collection = workspace.collection(containing: id) {
-                addRequest(item, toCollection: collection.id, folder: collection.ancestry(of: id)?.last?.id)
+            let place = workspace.placeID(of: id)
+            if let collection = workspace.collection(containing: place) {
+                addRequest(item, toCollection: collection.id, folder: collection.ancestry(of: place)?.last?.id)
             } else {
                 addDraft(item)
             }
@@ -511,15 +529,129 @@ final class AppModel {
         let copy = located.item.duplicated(name: located.item.name + " copy")
         if let collectionID = located.collectionID,
            let collection = workspace.collections.first(where: { $0.id == collectionID }) {
-            addRequest(copy, toCollection: collectionID, folder: collection.ancestry(of: requestID)?.last?.id)
+            let place = workspace.placeID(of: requestID)
+            addRequest(copy, toCollection: collectionID, folder: collection.ancestry(of: place)?.last?.id)
         } else {
             addDraft(copy)
         }
     }
 
     func renameRequest(_ requestID: UUID, to name: String) {
+        // A fork has a name of its own; its request keeps the name of the original.
+        if workspace.fork(id: requestID) != nil {
+            renameFork(requestID, to: name)
+            return
+        }
         guard let session = session(for: requestID) else { return }
         session.item.name = name
+    }
+
+    // MARK: Forks
+
+    func fork(id: UUID) -> RequestFork? { workspace.fork(id: id) }
+
+    func forks(of requestID: UUID) -> [RequestFork] { workspace.forks(of: requestID) }
+
+    func original(of fork: RequestFork) -> RequestItem? { workspace.collectionRequest(id: fork.originID) }
+
+    /// Forks a request of a collection and selects the fork.
+    @discardableResult
+    func forkRequest(_ requestID: UUID) -> UUID? {
+        // A fork copies the secrets of its original: with secrets locked it would copy blanks, and a
+        // merge would later put those blanks in the original.
+        guard !isVaultLocked else {
+            reportProblem("Secrets are locked, and a fork copies them. Unlock them first, then fork.")
+            return nil
+        }
+        var created: RequestFork?
+        mutate { created = $0.addFork(of: requestID) }
+        guard let created else {
+            inform("Only a request kept in a collection can be forked.")
+            return nil
+        }
+        selection = .request(created.id)
+        return created.id
+    }
+
+    func renameFork(_ forkID: UUID, to name: String) {
+        mutate { $0.renameFork(forkID, to: name) }
+    }
+
+    /// Removes a fork; its original is not touched.
+    func discardFork(_ forkID: UUID) {
+        guard let fork = workspace.fork(id: forkID) else { return }
+        sessions[forkID]?.task?.cancel()
+        sessions[forkID] = nil
+        mutate { $0.removeFork(forkID) }
+        if selection == .request(forkID) { selection = .request(fork.originID) }
+    }
+
+    /// Merges a fork into its original, removes it and shows the original.
+    func mergeFork(_ forkID: UUID, keepingOriginal: Set<RequestPart> = []) {
+        guard let fork = workspace.fork(id: forkID) else { return }
+        guard !isVaultLocked else {
+            reportProblem("Secrets are locked, so Bee cannot tell what this fork changed. Unlock them first, then merge.")
+            return
+        }
+        var originalID: UUID?
+        mutate { originalID = $0.mergeFork(forkID, keepingOriginal: keepingOriginal) }
+        guard let originalID else {
+            reportProblem("The original of “\(fork.name)” is no longer in a collection, so there is nothing to merge into.")
+            return
+        }
+        sessions[forkID]?.task?.cancel()
+        sessions[forkID] = nil
+        for session in sessions.values { refresh(session) }
+        selection = .request(originalID)
+        inform("Merged “\(fork.name)” into “\(fork.item.name)”.")
+    }
+
+    /// Turns a fork into a request of the collection, beside its original.
+    func keepForkAsRequest(_ forkID: UUID) {
+        guard let fork = workspace.fork(id: forkID),
+              let collection = workspace.collection(containing: fork.originID) else { return }
+        var item = fork.item
+        item.name = "\(fork.item.name) (\(fork.name))"
+        let folderID = collection.ancestry(of: fork.originID)?.last?.id
+        sessions[forkID]?.task?.cancel()
+        sessions[forkID] = nil
+        mutate { workspace in
+            workspace.removeFork(forkID)
+            guard let index = workspace.collections.firstIndex(where: { $0.id == collection.id }) else { return }
+            workspace.collections[index].insert(.request(item), inFolder: folderID)
+        }
+        selection = .request(item.id)
+    }
+
+    /// After requests were deleted: their forks go with them.
+    private func removeForks(ofRequestsIn nodes: [CollectionNode]) {
+        var originals: Set<UUID> = []
+        func collect(_ nodes: [CollectionNode]) {
+            for node in nodes {
+                switch node {
+                case .request(let request): originals.insert(request.id)
+                case .folder(let folder): collect(folder.items)
+                }
+            }
+        }
+        collect(nodes)
+        guard workspace.forks.contains(where: { originals.contains($0.originID) }) else { return }
+        var removed: [RequestFork] = []
+        mutate { removed = $0.removeForks(ofOriginals: originals) }
+        for fork in removed {
+            sessions[fork.id]?.task?.cancel()
+            sessions[fork.id] = nil
+        }
+    }
+
+    /// How many forks the requests under a node have, for a deletion that asks first.
+    func forkCount(in nodes: [CollectionNode]) -> Int {
+        nodes.reduce(0) { total, node in
+            switch node {
+            case .request(let request): total + workspace.forks(of: request.id).count
+            case .folder(let folder): total + forkCount(in: folder.items)
+            }
+        }
     }
 
     // MARK: Collections and folders
@@ -580,21 +712,27 @@ final class AppModel {
         guard let collection = collection(id: collectionID) else { return }
         collection.items.forEach(dropSessions)
         mutate { $0.collections.removeAll { $0.id == collectionID } }
+        removeForks(ofRequestsIn: collection.items)
         repairSelection()
     }
 
     /// Deletes a request, a folder or a draft.
     func deleteNode(_ nodeID: UUID) {
+        if workspace.fork(id: nodeID) != nil {
+            discardFork(nodeID)
+            return
+        }
         if workspace.scratchRequests.contains(where: { $0.id == nodeID }) {
             sessions[nodeID]?.task?.cancel()
             sessions[nodeID] = nil
             mutate { $0.scratchRequests.removeAll { $0.id == nodeID } }
         } else if let index = workspace.collections.firstIndex(where: { $0.node(id: nodeID) != nil }) {
+            var removedNode: CollectionNode?
             mutate { workspace in
-                if let removed = workspace.collections[index].remove(id: nodeID) {
-                    dropSessions(in: removed)
-                }
+                removedNode = workspace.collections[index].remove(id: nodeID)
+                if let removedNode { dropSessions(in: removedNode) }
             }
+            if let removedNode { removeForks(ofRequestsIn: [removedNode]) }
         }
         repairSelection()
     }
@@ -602,6 +740,8 @@ final class AppModel {
     /// Moves a request, a folder or a draft into a collection (root when `folderID` is nil).
     func moveNode(_ nodeID: UUID, toCollection collectionID: UUID, folder folderID: UUID?, at position: Int? = nil) {
         guard let targetIndex = workspace.collections.firstIndex(where: { $0.id == collectionID }) else { return }
+        // A fork stays with its original.
+        guard workspace.fork(id: nodeID) == nil else { return }
         // A folder cannot move into itself or one of its descendants.
         if let folderID, folderID == nodeID { return }
         if let folderID, let source = workspace.collection(containing: nodeID),
@@ -691,8 +831,10 @@ final class AppModel {
 
     func send(_ session: RequestSession) {
         guard !session.isSending else { return }
+        // A fork is sent from the place of its original: same folders, authorization and scripts.
         let input = RunInput(
-            item: session.item, collectionID: session.collectionID, workspace: workspace, settings: settings
+            item: session.item, collectionID: session.collectionID, workspace: workspace, settings: settings,
+            placeID: workspace.fork(id: session.id)?.originID
         )
         let environmentName = workspace.activeEnvironment?.name
         session.isSending = true
@@ -806,7 +948,7 @@ final class AppModel {
     /// The request as a cURL command in template form; secret values are never included.
     func curlCommand(for session: RequestSession) -> String {
         let collection = session.collectionID.flatMap { collection(id: $0) }
-        let folders = collection?.ancestry(of: session.id) ?? []
+        let folders = collection?.ancestry(of: workspace.placeID(of: session.id)) ?? []
         let auth = RequestBuilder.effectiveAuth(for: session.item, folders: folders, collection: collection)
         return CurlCodec.command(for: session.item, auth: auth)
     }

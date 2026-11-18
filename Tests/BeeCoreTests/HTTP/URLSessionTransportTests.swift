@@ -289,10 +289,10 @@ import Testing
     }
 
     @Test func refusedConnectionsAreReported() async throws {
-        let server = try await LoopbackServer.start()
-        let url = try #require(URL(string: server.baseURL.absoluteString + "/echo"))
-        let port = server.port
-        await server.stop()
+        // A port nothing listens on. Taking the port of a server just stopped is not safe here: another
+        // test running at the same time may be given it for a server of its own.
+        let port = 1
+        let url = try #require(URL(string: "http://127.0.0.1:\(port)/echo"))
         do {
             _ = try await URLSessionTransport().send(ResolvedRequest(method: "GET", url: url, timeout: 5))
             Issue.record("expected a connection failure")

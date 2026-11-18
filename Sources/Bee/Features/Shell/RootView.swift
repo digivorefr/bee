@@ -18,6 +18,14 @@ struct RootView: View {
                     if model.isVaultLocked { VaultLockedBanner() }
                 }
                 .overlay(alignment: .bottom) { NoticeBanner() }
+                .sheet(isPresented: Binding(
+                    get: { ShellState.shared.mergingFork != nil },
+                    set: { if !$0 { ShellState.shared.mergingFork = nil } }
+                )) {
+                    if let forkID = ShellState.shared.mergingFork {
+                        ForkMergeSheet(forkID: forkID).environment(model)
+                    }
+                }
                 .background(Theme.paper)
                 .navigationTitle(model.selectionTitle)
                 .navigationSubtitle(model.selectionBreadcrumb)

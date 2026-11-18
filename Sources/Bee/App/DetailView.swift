@@ -41,6 +41,7 @@ struct RequestWorkspaceView: View {
     let session: RequestSession
 
     var body: some View {
+        let isFork = model.fork(id: session.id) != nil
         GeometryReader { proxy in
             let facing = model.settings.responseLayout == .beside
                 && proxy.size.width >= Theme.Layout.facingPagesMinWidth
@@ -61,6 +62,17 @@ struct RequestWorkspaceView: View {
                         ResponsePageView(session: session)
                     }
                 }
+            }
+        }
+        // A fork is not the request of the collection: its page has another ground, edge to edge,
+        // and a rule down its leading edge.
+        .background(isFork ? Theme.forkPaper : Theme.paper)
+        .overlay(alignment: .leading) {
+            if isFork {
+                Rectangle()
+                    .fill(Theme.forkInk)
+                    .frame(width: Theme.Layout.forkRule)
+                    .accessibilityHidden(true)
             }
         }
     }

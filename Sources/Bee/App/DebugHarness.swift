@@ -21,6 +21,9 @@ import SwiftUI
 ///     menu:<menu item title>     shot:<window title>|<png path>
 ///     raw:<body text, \n for a line break>      probe:<samples> (logs the geometry of each editor over time)
 ///     updatecheck   updateinstall   updatephase (logs where the update stands)
+///     fork (forks the selected request)   selectfork:<fork name>   mergesheet   forkmerge   forkdiscard
+///     sheetshot:<png path> (the sheet attached to the main window)   delete (the selected request)
+///     keepfork (turns the selected fork into a request)
 ///
 /// `BEE_UPDATE_FEED=<url>` and `BEE_UPDATE_PUBLIC_KEY=<base64>` point the updater at a local feed.
 ///
@@ -256,6 +259,32 @@ enum DebugHarness {
                 previous = line
                 try? await Task.sleep(for: .milliseconds(40))
             }
+        case "fork":
+            guard case .request(let id) = model.selection, model.forkRequest(id) != nil else { return log("fork: nothing to fork") }
+        case "selectfork":
+            guard let fork = model.workspace.forks.first(where: { $0.name == argument }) else { return log("no fork named \(argument)") }
+            model.selection = .request(fork.id)
+        case "mergesheet":
+            guard let fork = model.selectedFork else { return log("mergesheet: no fork selected") }
+            ShellState.shared.mergingFork = fork.id
+            try? await Task.sleep(for: .milliseconds(700))
+        case "sheetshot":
+            guard let sheet = mainWindow()?.attachedSheet else { return log("sheetshot: no sheet") }
+            try? await Task.sleep(for: .milliseconds(350))
+            snapshot(to: argument, window: sheet)
+        case "delete":
+            guard case .request(let id) = model.selection else { return log("delete: no request selected") }
+            model.deleteNode(id)
+        case "keepfork":
+            guard let fork = model.selectedFork else { return log("keepfork: no fork selected") }
+            model.keepForkAsRequest(fork.id)
+        case "forkmerge":
+            guard let fork = model.selectedFork else { return log("forkmerge: no fork selected") }
+            ShellState.shared.mergingFork = nil
+            model.mergeFork(fork.id)
+        case "forkdiscard":
+            guard let fork = model.selectedFork else { return log("forkdiscard: no fork selected") }
+            model.discardFork(fork.id)
         case "updatecheck":
             await model.updates.check()
         case "updateinstall":

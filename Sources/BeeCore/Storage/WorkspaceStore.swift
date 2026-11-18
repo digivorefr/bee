@@ -26,7 +26,7 @@ public struct LoadedWorkspace: Sendable {
 
 /// Persists the workspace as JSON files and its secret values in the vault.
 ///
-/// Layout: `workspace.json` (orders, globals, active environment, scratch requests),
+/// Layout: `workspace.json` (orders, globals, active environment, scratch requests, forks),
 /// `collections/<id>.json`, `environments/<id>.json`, `history.json`, `settings.json`.
 /// No JSON file ever holds a secret value: the models do not encode them, and the store sends
 /// them to the vault only.
@@ -38,6 +38,7 @@ public actor WorkspaceStore {
         var globals: [Variable] = []
         var activeEnvironmentID: UUID?
         var scratchRequests: [RequestItem] = []
+        var forks: [RequestFork] = []
 
         init() {}
 
@@ -49,6 +50,18 @@ public actor WorkspaceStore {
             globals = try container.decodeIfPresent([Variable].self, forKey: .globals) ?? []
             activeEnvironmentID = try container.decodeIfPresent(UUID.self, forKey: .activeEnvironmentID)
             scratchRequests = try container.decodeIfPresent([RequestItem].self, forKey: .scratchRequests) ?? []
+            // One fork that cannot be read is left out; it never costs the rest of the file.
+            forks = ((try? container.decodeIfPresent([Lossy<RequestFork>].self, forKey: .forks)) ?? [])
+                .compactMap(\.value)
+        }
+    }
+
+    /// Decodes to `nil` instead of failing.
+    private struct Lossy<Value: Decodable>: Decodable {
+        var value: Value?
+
+        init(from decoder: Decoder) throws {
+            value = try? Value(from: decoder)
         }
     }
 
@@ -106,8 +119,18 @@ public actor WorkspaceStore {
             ),
             globals: manifest.globals,
             activeEnvironmentID: manifest.activeEnvironmentID,
-            scratchRequests: manifest.scratchRequests
+            scratchRequests: manifest.scratchRequests,
+            forks: manifest.forks
         )
+        // A fork whose original is gone is not lost: it becomes a one-off request. Not while a file
+        // could not be read, though: its requests may be back at the next launch, and their forks with them.
+        if unreadableDocuments.isEmpty {
+            for orphan in workspace.removeForksWithoutOriginal() {
+                var request = orphan.item
+                request.name = "\(request.name) (\(orphan.name))"
+                workspace.scratchRequests.append(request)
+            }
+        }
         vaultState = hydrate(&workspace)
         return LoadedWorkspace(
             workspace: workspace, vaultState: vaultState, warnings: warnings, isFirstLaunch: isFirstLaunch
@@ -145,6 +168,7 @@ public actor WorkspaceStore {
         manifest.globals = workspace.globals
         manifest.activeEnvironmentID = workspace.activeEnvironmentID
         manifest.scratchRequests = workspace.scratchRequests
+        manifest.forks = workspace.forks
         try write(manifest, to: workspaceFile)
 
         try removeDocuments(in: collectionsDirectory, except: collectionNames.union(unreadableDocuments))

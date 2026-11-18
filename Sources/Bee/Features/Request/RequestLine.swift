@@ -52,6 +52,11 @@ struct RequestLineView: View {
             .fixedSize(horizontal: false, vertical: true)
             DestinationCaption(destination: destination(in: context))
                 .padding(.leading, Self.methodWidth + Theme.Space.s)
+            if let fork = model.fork(id: session.id) {
+                ForkBanner(fork: fork)
+                    .padding(.leading, Self.methodWidth + Theme.Space.s)
+                    .padding(.top, Theme.Space.s)
+            }
         }
         // The line starts on the text column of the pages below (their chevrons hang in the gutter).
         .padding(.leading, Theme.Layout.pageInset + Theme.Layout.gutter)
@@ -151,6 +156,15 @@ struct RequestLineView: View {
         Menu {
             Button("Copy as cURL") { model.copy(model.curlCommand(for: session)) }
             Button("Duplicate") { model.duplicateRequest(session.id) }
+            if let fork = model.fork(id: session.id) {
+                Divider()
+                Button("Merge into Original…") { ShellState.shared.mergingFork = fork.id }
+                Button("Keep as New Request") { model.keepForkAsRequest(fork.id) }
+                Button("Show Original") { model.selection = .request(fork.originID) }
+                Button("Discard Fork") { ShellActions.discardFork(fork, model: model) }
+            } else if session.collectionID != nil {
+                Button("Fork") { model.forkRequest(session.id) }
+            }
             if session.collectionID == nil, !model.workspace.collections.isEmpty {
                 Menu("Keep in collection") {
                     ForEach(model.workspace.collections) { collection in

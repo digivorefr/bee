@@ -37,21 +37,25 @@ struct CellMark: View {
     private let glyph: String?
     private let color: Color
     private let size: CGFloat
+    private let isHollow: Bool
 
-    /// - Parameter size: the size of the text the mark sits beside.
-    init(_ glyph: String? = nil, color: Color, size: CGFloat = Theme.Size.body) {
+    /// - Parameters:
+    ///   - size: the size of the text the mark sits beside.
+    ///   - isHollow: an empty cell, drawn by its wall only: what is not the real thing yet (a fork).
+    init(_ glyph: String? = nil, color: Color, size: CGFloat = Theme.Size.body, isHollow: Bool = false) {
         self.glyph = glyph
         self.color = color
         self.size = size
+        self.isHollow = isHollow
     }
 
     var body: some View {
         let side = (size * 1.3).rounded()
         // The stroke rounds the corners; the padding keeps it inside the frame.
-        let edge = side * 0.12
+        let edge = side * (isHollow ? 0.14 : 0.12)
         ZStack {
             CellShape()
-                .fill(color)
+                .fill(isHollow ? Color.clear : color)
                 .overlay(CellShape().stroke(color, style: StrokeStyle(lineWidth: edge, lineJoin: .round)))
                 .padding(edge / 2)
             if let glyph {

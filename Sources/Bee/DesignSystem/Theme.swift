@@ -89,6 +89,10 @@ enum Theme {
     static let tokenGround = Color(nsColor: Palette.tokenGround)
     /// Ground of a hovered or selected row on the paper.
     static let rowHover = Color(nsColor: Palette.rowHover)
+    /// The page of a fork: a request being tried, not the one of the collection.
+    static let forkPaper = Color(nsColor: Palette.forkPaper)
+    /// The mark and the words that say "fork".
+    static let forkInk = Color(nsColor: Palette.forkInk)
     static let positive = Color(nsColor: Palette.positive)
     static let warning = Color(nsColor: Palette.warning)
     static let negative = Color(nsColor: Palette.negative)
@@ -109,6 +113,8 @@ enum Theme {
         static let hairline = dynamic(light: 0xE3E3E8, dark: 0x38383A)
         static let tokenGround = dynamic(light: 0xEDEDF0, dark: 0x3A3A3C)
         static let rowHover = dynamic(light: 0xF4F4F6, dark: 0x2C2C2E)
+        static let forkPaper = dynamic(light: 0xF1F5FB, dark: 0x1A2029)
+        static let forkInk = dynamic(light: 0x33568A, dark: 0x8FB4E8)
         static let positive = dynamic(light: 0x1A7F37, dark: 0x3FB950)
         static let warning = dynamic(light: 0x9A6700, dark: 0xD29922)
         static let negative = dynamic(light: 0xC6372B, dark: 0xF85149)
@@ -141,6 +147,8 @@ enum Theme {
         static let gutter: CGFloat = 20
         /// Vertical inset of the text inside an outlined field.
         static let fieldInset: CGFloat = 6
+        /// Width of the rule down the leading edge of a fork's page.
+        static let forkRule: CGFloat = 3
         /// Minimum height of a button.
         static let controlHeight: CGFloat = 28
         /// Text above this many UTF-16 units is shown without syntax colors.

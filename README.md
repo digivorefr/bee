@@ -42,6 +42,14 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 - `{{name}}` anywhere in a request is replaced by the variable of that name: the active environment first, then the collection, then the globals.
 - A path segment written `:name` (`/tickets/:ticketId`) is a path variable. Its value is set under **Path variables** and may use `{{variables}}`; left empty, it takes the variable of the same name. The value is percent-encoded as one segment (`a/b` is sent as `a%2Fb`), where a `{{placeholder}}` typed in the URL is pasted as it is.
 
+## Forks
+
+- **Request › Fork** copies a request of a collection to try things on it. The fork is listed under its original, with an empty cell; its page has another ground, so the two are never mistaken.
+- A fork is kept on this Mac only (`workspace.json`), never in the collection. It is sent from the place of its original: same folders, authorization and scripts.
+- The parts a fork has not changed (URL, parameters, authorization, headers, body, scripts, settings) follow the original. The parts it changed stay its own.
+- **Merge…** puts the changed parts in the original and removes the fork; where the original changed the same part since, the review asks which one to keep. A fork can also be kept as a new request, or discarded. Its secrets have their own entries in the vault, moved to the original by a merge.
+- While secrets are locked, Bee cannot tell what a fork changed: forking and merging wait until they are unlocked. Deleting a request that has forks asks first, since they go with it.
+
 ## Secrets
 
 - A secret (a secret variable, an authorization credential, a row marked secret) is never encoded by the models: no workspace file, history entry, export or cURL command can contain its value.

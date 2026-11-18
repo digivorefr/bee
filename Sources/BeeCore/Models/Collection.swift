@@ -284,16 +284,33 @@ public struct Workspace: Hashable, Sendable, Codable, SecretContaining {
     public var activeEnvironmentID: UUID?
     /// One-off requests tried without being kept in a collection.
     public var scratchRequests: [RequestItem]
+    /// Copies of collection requests to try things on. Kept on this Mac only, never in a collection.
+    public var forks: [RequestFork]
 
     public init(
         collections: [Collection] = [], environments: [Environment] = [], globals: [Variable] = [],
-        activeEnvironmentID: UUID? = nil, scratchRequests: [RequestItem] = []
+        activeEnvironmentID: UUID? = nil, scratchRequests: [RequestItem] = [], forks: [RequestFork] = []
     ) {
         self.collections = collections
         self.environments = environments
         self.globals = globals
         self.activeEnvironmentID = activeEnvironmentID
         self.scratchRequests = scratchRequests
+        self.forks = forks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case collections, environments, globals, activeEnvironmentID, scratchRequests, forks
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        collections = try container.decodeIfPresent([Collection].self, forKey: .collections) ?? []
+        environments = try container.decodeIfPresent([Environment].self, forKey: .environments) ?? []
+        globals = try container.decodeIfPresent([Variable].self, forKey: .globals) ?? []
+        activeEnvironmentID = try container.decodeIfPresent(UUID.self, forKey: .activeEnvironmentID)
+        scratchRequests = try container.decodeIfPresent([RequestItem].self, forKey: .scratchRequests) ?? []
+        forks = try container.decodeIfPresent([RequestFork].self, forKey: .forks) ?? []
     }
 
     public var activeEnvironment: Environment? {
@@ -310,5 +327,6 @@ public struct Workspace: Hashable, Sendable, Codable, SecretContaining {
         environments.forEachSecret(body)
         globals.forEachSecret(body)
         scratchRequests.forEachSecret(body)
+        forks.forEachSecret(body)
     }
 }

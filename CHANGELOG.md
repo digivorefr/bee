@@ -2,6 +2,17 @@
 
 What changed in each version of Bee, newest first. The first version listed is the version the application is built as, and Bee shows this file under Help › What's New in Bee.
 
+## 1.2.0 — 2026-11-18
+
+### Added
+
+- Forks: try changes on a request of a collection without touching it (Request › Fork). A fork is kept on this Mac only and has a page of its own colour. The parts it has not changed follow the original.
+- A fork is merged into its original part by part, with a choice where both changed; it can also be kept as a new request, or discarded. A request can have as many forks as needed.
+
+### Fixed
+
+- A GET request sent with a body now says why macOS refuses to send it.
+
 ## 1.1.0 — 2026-11-18
 
 ### Added

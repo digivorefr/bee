@@ -40,31 +40,42 @@ final class ShellState {
     @ObservationIgnored var commitRename: (() -> Void)?
 
     enum PendingDelete: Identifiable, Equatable {
-        case collection(id: UUID, name: String, requestCount: Int)
-        case folder(id: UUID, name: String, requestCount: Int)
+        case collection(id: UUID, name: String, requestCount: Int, forkCount: Int)
+        case folder(id: UUID, name: String, requestCount: Int, forkCount: Int)
+        case request(id: UUID, name: String, forkCount: Int)
         case environment(id: UUID, name: String)
+        case fork(id: UUID, name: String)
 
         var id: UUID {
             switch self {
-            case .collection(let id, _, _), .folder(let id, _, _), .environment(let id, _): id
+            case .collection(let id, _, _, _), .folder(let id, _, _, _), .request(let id, _, _),
+                 .environment(let id, _), .fork(let id, _): id
             }
         }
 
         var title: String {
             switch self {
-            case .collection(_, let name, let count):
+            case .collection(_, let name, let count, _):
                 "Delete the collection “\(name)” and its \(Self.requests(count))?"
-            case .folder(_, let name, let count):
+            case .folder(_, let name, let count, _):
                 "Delete the folder “\(name)” and its \(Self.requests(count))?"
+            case .request(_, let name, let forks):
+                "Delete the request “\(name)” and its \(forks == 1 ? "fork" : "\(forks) forks")?"
             case .environment(_, let name):
                 "Delete the environment “\(name)”?"
+            case .fork(_, let name):
+                "Discard the fork “\(name)”?"
             }
         }
 
         var message: String {
             switch self {
-            case .collection, .folder: "This cannot be undone."
+            case .collection(_, _, _, let forks), .folder(_, _, _, let forks):
+                forks == 0 ? "This cannot be undone."
+                    : "The \(forks == 1 ? "fork" : "\(forks) forks") of its requests \(forks == 1 ? "is" : "are") deleted too. This cannot be undone."
+            case .request: "What the forks changed is lost. This cannot be undone."
             case .environment: "Its variables and secrets are removed from this Mac. This cannot be undone."
+            case .fork: "What it changed is lost. The original is not touched."
             }
         }
 
@@ -72,7 +83,9 @@ final class ShellState {
             switch self {
             case .collection: "Delete collection"
             case .folder: "Delete folder"
+            case .request: "Delete request"
             case .environment: "Delete environment"
+            case .fork: "Discard fork"
             }
         }
 
@@ -86,6 +99,8 @@ final class ShellState {
     var renaming: SidebarSelection?
     var renameText = ""
     var pendingDelete: PendingDelete?
+    /// The fork whose merge is being reviewed.
+    var mergingFork: UUID?
 
     func isCollectionExpanded(_ id: UUID) -> Bool { !toggled.contains(id) }
     func isFolderExpanded(_ id: UUID) -> Bool { toggled.contains(id) }
@@ -101,7 +116,9 @@ final class ShellState {
     func reveal(_ selection: SidebarSelection?, in workspace: Workspace) {
         let nodeID: UUID
         switch selection {
-        case .request(let id), .folder(let id): nodeID = id
+        // A fork is shown under its original.
+        case .request(let id): nodeID = workspace.placeID(of: id)
+        case .folder(let id): nodeID = id
         default: return
         }
         guard let collection = workspace.collection(containing: nodeID) else { return }
@@ -140,8 +157,10 @@ extension AppModel {
     var selectionBreadcrumb: String {
         switch selection {
         case .request(let id):
-            guard let collection = workspace.collection(containing: id) else { return "Draft" }
-            return path(in: collection, to: id)
+            let place = workspace.placeID(of: id)
+            guard let collection = workspace.collection(containing: place) else { return "Draft" }
+            let path = path(in: collection, to: place)
+            return fork(id: id).map { "Fork “\($0.name)” · \(path)" } ?? path
         case .folder(let id):
             guard let collection = workspace.collection(containing: id) else { return "Folder" }
             return path(in: collection, to: id)
@@ -169,8 +188,9 @@ extension AppModel {
         case .folder(let id):
             return workspace.collection(containing: id).map { ($0.id, id) }
         case .request(let id):
-            guard let collection = workspace.collection(containing: id) else { return nil }
-            return (collection.id, collection.ancestry(of: id)?.last?.id)
+            let place = workspace.placeID(of: id)
+            guard let collection = workspace.collection(containing: place) else { return nil }
+            return (collection.id, collection.ancestry(of: place)?.last?.id)
         default:
             return nil
         }
@@ -180,9 +200,21 @@ extension AppModel {
     var selectedCollectionID: UUID? {
         switch selection {
         case .collection(let id): collection(id: id)?.id
-        case .folder(let id), .request(let id): workspace.collection(containing: id)?.id
+        case .folder(let id): workspace.collection(containing: id)?.id
+        case .request(let id): workspace.collection(containing: workspace.placeID(of: id))?.id
         default: nil
         }
+    }
+
+    /// The selected request when it can be forked: one kept in a collection, not itself a fork.
+    var forkableRequestID: UUID? {
+        guard case .request(let id) = selection, workspace.collectionRequest(id: id) != nil else { return nil }
+        return id
+    }
+
+    var selectedFork: RequestFork? {
+        guard case .request(let id) = selection else { return nil }
+        return fork(id: id)
     }
 
     var selectedRequestID: UUID? {
@@ -246,7 +278,19 @@ enum ShellActions {
         if count == 0 {
             model.deleteNode(folder.id)
         } else {
-            ShellState.shared.pendingDelete = .folder(id: folder.id, name: folder.name, requestCount: count)
+            ShellState.shared.pendingDelete = .folder(
+                id: folder.id, name: folder.name, requestCount: count, forkCount: model.forkCount(in: folder.items)
+            )
+        }
+    }
+
+    /// Deletes a request at once unless it has forks, which would go with it.
+    static func deleteRequest(_ requestID: UUID, name: String, model: AppModel) {
+        let forks = model.forks(of: requestID).count
+        if forks == 0 {
+            model.deleteNode(requestID)
+        } else {
+            ShellState.shared.pendingDelete = .request(id: requestID, name: name, forkCount: forks)
         }
     }
 
@@ -255,15 +299,29 @@ enum ShellActions {
         if count == 0 {
             model.deleteCollection(collection.id)
         } else {
-            ShellState.shared.pendingDelete = .collection(id: collection.id, name: collection.name, requestCount: count)
+            ShellState.shared.pendingDelete = .collection(
+                id: collection.id, name: collection.name, requestCount: count,
+                forkCount: model.forkCount(in: collection.items)
+            )
         }
     }
 
     static func confirm(_ pending: ShellState.PendingDelete, model: AppModel) {
         switch pending {
-        case .collection(let id, _, _): model.deleteCollection(id)
-        case .folder(let id, _, _): model.deleteNode(id)
+        case .collection(let id, _, _, _): model.deleteCollection(id)
+        case .folder(let id, _, _, _), .request(let id, _, _): model.deleteNode(id)
         case .environment(let id, _): model.deleteEnvironment(id)
+        case .fork(let id, _): model.discardFork(id)
+        }
+    }
+
+    /// Discards a fork at once when it changed nothing; asks first otherwise.
+    static func discardFork(_ fork: RequestFork, model: AppModel) {
+        // With secrets locked, a fork that only changed a secret looks unchanged: ask anyway.
+        if fork.changedParts.isEmpty, !model.isVaultLocked {
+            model.discardFork(fork.id)
+        } else {
+            ShellState.shared.pendingDelete = .fork(id: fork.id, name: fork.name)
         }
     }
 

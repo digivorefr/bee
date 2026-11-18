@@ -15,7 +15,7 @@ struct SidebarView: View {
             if !model.workspace.scratchRequests.isEmpty {
                 Section("Drafts") {
                     ForEach(model.workspace.scratchRequests) { draft in
-                        requestRow(draft, depth: 0)
+                        requestRow(draft, depth: 0, isInCollection: false)
                     }
                 }
                 .collapsible(false)
@@ -83,6 +83,7 @@ struct SidebarView: View {
             case collection(Collection)
             case folder(Folder)
             case request(RequestItem)
+            case fork(RequestFork)
         }
 
         let content: Content
@@ -94,6 +95,7 @@ struct SidebarView: View {
             case .collection(let collection): collection.id
             case .folder(let folder): folder.id
             case .request(let request): request.id
+            case .fork(let fork): fork.id
             }
         }
     }
@@ -111,6 +113,10 @@ struct SidebarView: View {
                     }
                 case .request(let request):
                     rows.append(TreeRow(content: .request(request), collectionID: collectionID, depth: depth))
+                    // Its forks stand right under it.
+                    for fork in model.workspace.forks(of: request.id) {
+                        rows.append(TreeRow(content: .fork(fork), collectionID: collectionID, depth: depth + 1))
+                    }
                 }
             }
         }
@@ -128,25 +134,48 @@ struct SidebarView: View {
         switch row.content {
         case .collection(let collection): collectionRow(collection)
         case .folder(let folder): folderRow(folder, collectionID: row.collectionID, depth: row.depth)
-        case .request(let request): requestRow(request, depth: row.depth)
+        case .request(let request): requestRow(request, depth: row.depth, isInCollection: true)
+        case .fork(let fork): forkRow(fork, depth: row.depth)
         }
     }
 
     // MARK: Rows
 
-    private func requestRow(_ request: RequestItem, depth: Int) -> some View {
+    private func requestRow(_ request: RequestItem, depth: Int, isInCollection: Bool) -> some View {
         let selection = SidebarSelection.request(request.id)
         return SidebarRow(
             selection: selection, name: request.name, depth: depth, kind: .request(request.method),
+            hasForks: isInCollection && !model.workspace.forks(of: request.id).isEmpty,
             rename: { model.renameRequest(request.id, to: $0) }
         )
         .tag(selection)
         .draggable(SidebarDrag.payload(for: request.id))
         .contextMenu {
+            if isInCollection {
+                Button("Fork") { model.forkRequest(request.id) }
+            }
             Button("Duplicate") { model.duplicateRequest(request.id) }
             Button("Rename") { beginRename(selection, name: request.name) }
             Divider()
-            Button("Delete", role: .destructive) { model.deleteNode(request.id) }
+            Button("Delete", role: .destructive) {
+                ShellActions.deleteRequest(request.id, name: request.name, model: model)
+            }
+        }
+    }
+
+    private func forkRow(_ fork: RequestFork, depth: Int) -> some View {
+        let selection = SidebarSelection.request(fork.id)
+        return SidebarRow(
+            selection: selection, name: fork.name, depth: depth, kind: .fork,
+            rename: { model.renameFork(fork.id, to: $0) }
+        )
+        .tag(selection)
+        .contextMenu {
+            Button("Merge into Original…") { shell.mergingFork = fork.id }
+            Button("Keep as New Request") { model.keepForkAsRequest(fork.id) }
+            Button("Rename") { beginRename(selection, name: fork.name) }
+            Divider()
+            Button("Discard", role: .destructive) { ShellActions.discardFork(fork, model: model) }
         }
     }
 
@@ -276,7 +305,7 @@ struct SidebarView: View {
     private func beginRenameOfSelection() -> KeyPress.Result {
         guard shell.renaming == nil, let selection = model.selection else { return .ignored }
         let name: String? = switch selection {
-        case .request(let id): model.session(for: id)?.item.name
+        case .request(let id): model.fork(id: id)?.name ?? model.session(for: id)?.item.name
         case .folder(let id): model.folder(id: id)?.name
         case .collection(let id): model.collection(id: id)?.name
         case .environment(let id): model.environment(id: id)?.name
@@ -392,6 +421,8 @@ private struct SidebarRow: View {
         case container(glyph: String, isExpanded: Bool, toggle: () -> Void)
         case leaf(glyph: String)
         case request(HTTPMethod)
+        /// A fork of the request above it.
+        case fork
     }
 
     @Environment(AppModel.self) private var model
@@ -403,6 +434,8 @@ private struct SidebarRow: View {
     let depth: Int
     let kind: Kind
     var isActive = false
+    /// True for a request that has forks: the full cell says which one is the original.
+    var hasForks = false
     /// `nil` when the row has a fixed name.
     var rename: ((String) -> Void)?
 
@@ -425,6 +458,12 @@ private struct SidebarRow: View {
             }
             Spacer(minLength: Theme.Space.s)
             if isActive { activeMark }
+            if hasForks {
+                CellMark(color: Theme.inkSecondary, size: Theme.Size.caption - 2)
+                    .accessibilityHidden(false)
+                    .accessibilityLabel("Original, has forks")
+                    .help("The original. Its forks are listed under it.")
+            }
         }
         .contentShape(Rectangle())
     }
@@ -451,6 +490,12 @@ private struct SidebarRow: View {
             MethodLabel(method: method)
                 .lineLimit(1)
                 .frame(width: ShellMetrics.methodColumn, alignment: .leading)
+        case .fork:
+            // An empty cell: a request being tried, not the one of the collection.
+            CellMark(color: Theme.forkInk, size: Theme.Size.caption, isHollow: true)
+                .frame(width: ShellMetrics.glyphColumn, alignment: .leading)
+                .accessibilityHidden(false)
+                .accessibilityLabel("Fork")
         }
     }
 

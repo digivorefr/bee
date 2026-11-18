@@ -96,6 +96,36 @@ private func jsonResponse(_ body: String, status: Int = 200) -> HTTPResponse {
         #expect(!history.contains("otp=45"))
     }
 
+    @Test func aForkIsSentFromItsOriginalsPlace() async throws {
+        let original = RequestItem(name: "Me", url: "{{baseUrl}}/me")
+        let folder = Folder(
+            name: "Private", items: [.request(original)],
+            auth: AuthConfig(kind: .bearer, bearerToken: SecretField(value: "{{apiToken}}")),
+            preRequestScript: "bee.request.headers.upsert({ key: 'X-Folder', value: 'yes' })"
+        )
+        let (base, collectionID) = workspace(request: RequestItem(name: "Other"), collection: Collection(name: "API", items: [.folder(folder)]))
+        var workspace = base
+        let addedFork = workspace.addFork(of: original.id)
+        let fork = try #require(addedFork)
+        var edited = fork.item
+        edited.url = "{{baseUrl}}/me/forked"
+        workspace.updateFork(edited)
+
+        let transport = RecordingTransport { _ in jsonResponse("{}") }
+        let runner = RequestRunner(transport: transport, scripts: JSScriptEngine())
+        let outcome = await runner.run(RunInput(
+            item: edited, collectionID: collectionID, workspace: workspace, settings: AppSettings(), placeID: original.id
+        ))
+
+        let sent = try #require(transport.requests.first)
+        #expect(sent.url.absoluteString == "https://api.example.test/me/forked")
+        // The folder of the original gives its authorization and runs its script.
+        #expect(sent.headers.contains(HeaderEntry(name: "Authorization", value: "Bearer \(secret)")))
+        #expect(sent.headers.contains(HeaderEntry(name: "X-Folder", value: "yes")))
+        // The history remembers the fork, not the original.
+        #expect(outcome.historyEntry.sourceRequestID == fork.id)
+    }
+
     @Test func consoleAndTestsAreRedacted() async {
         var request = RequestItem(name: "Leaky", url: "{{baseUrl}}/leak")
         request.postResponseScript = """

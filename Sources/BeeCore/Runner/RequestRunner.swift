@@ -7,12 +7,19 @@ public struct RunInput: Sendable {
     public var collectionID: UUID?
     public var workspace: Workspace
     public var settings: AppSettings
+    /// The request of the collection whose place this one takes: the original of a fork, which is sent
+    /// with the folders, the authorization and the scripts its original inherits. `nil` for a request
+    /// that is in the collection itself.
+    public var placeID: UUID?
 
-    public init(item: RequestItem, collectionID: UUID?, workspace: Workspace, settings: AppSettings) {
+    public init(
+        item: RequestItem, collectionID: UUID?, workspace: Workspace, settings: AppSettings, placeID: UUID? = nil
+    ) {
         self.item = item
         self.collectionID = collectionID
         self.workspace = workspace
         self.settings = settings
+        self.placeID = placeID
     }
 }
 
@@ -66,7 +73,7 @@ public final class RequestRunner: Sendable {
     public func run(_ input: RunInput) async -> RunOutcome {
         let workspace = input.workspace
         let collection = input.collectionID.flatMap { id in workspace.collections.first { $0.id == id } }
-        let folders = collection?.ancestry(of: input.item.id) ?? []
+        let folders = collection?.ancestry(of: input.placeID ?? input.item.id) ?? []
         let environment = workspace.activeEnvironment
 
         let initialScopes = ScriptScopes(
