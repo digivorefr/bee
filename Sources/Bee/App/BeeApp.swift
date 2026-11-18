@@ -23,7 +23,7 @@ struct BeeApp: App {
                     #if DEBUG
                     DebugHarness.runIfRequested(model: model)
                     #endif
-                    await model.checkForUpdatesIfDue()
+                    await model.keepCheckingForUpdates()
                 }
         }
         .defaultSize(width: 1280, height: 800)

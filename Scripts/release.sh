@@ -1,14 +1,18 @@
 #!/bin/bash
 # Packages Bee for download: builds the release application, zips it with the license and writes
 # the release notes from CHANGELOG.md. With --publish, also creates the GitHub release.
-# Usage: Scripts/release.sh [--publish]
+# Usage: Scripts/release.sh [--publish] [--unsigned]
+#   --unsigned  publish without the update signature: copies of Bee will not install this release
+#               by themselves, and this version will never install an update by itself either.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PUBLISH=false
+UNSIGNED=false
 for argument in "$@"; do
     case "$argument" in
         --publish) PUBLISH=true ;;
+        --unsigned) UNSIGNED=true ;;
         *) echo "Unknown option: $argument" >&2; exit 2 ;;
     esac
 done
@@ -21,6 +25,12 @@ NAME="Bee-$VERSION"
 STAGE="$ROOT/dist/release"
 ZIP="$ROOT/dist/$NAME.zip"
 NOTES="$ROOT/dist/$NAME-notes.md"
+KEY="$ROOT/Resources/update-key.txt"
+
+if ! $UNSIGNED && [ ! -f "$KEY" ]; then
+    $PUBLISH && fail "No release key (Resources/update-key.txt). Create it with: swift Scripts/update-key.swift generate
+A release published without it cannot be installed by Bee itself; pass --unsigned to publish anyway."
+fi
 
 if $PUBLISH; then
     # A release is cut from what is on GitHub, nothing else.
@@ -45,6 +55,11 @@ CHECK="$(mktemp -d)"
 ditto -x -k "$ZIP" "$CHECK"
 codesign --verify --strict "$CHECK/$NAME/Bee.app" || fail "The packaged application does not verify."
 [ -f "$CHECK/$NAME/LICENSE.md" ] || fail "The license is missing from the archive."
+if ! $UNSIGNED && [ -f "$KEY" ]; then
+    # The packaged application must carry the key it will check the next update with.
+    cmp -s "$KEY" "$CHECK/$NAME/Bee.app/Contents/Resources/update-key.txt" \
+        || fail "The packaged application does not carry Resources/update-key.txt."
+fi
 rm -rf "$CHECK" "$STAGE"
 
 SUM="$(shasum -a 256 "$ZIP" | cut -d ' ' -f 1)"
@@ -52,15 +67,16 @@ SUM="$(shasum -a 256 "$ZIP" | cut -d ' ' -f 1)"
 # Signed with the release key, the archive can be installed by Bee itself (Check for Updates).
 # The Keychain asks before the key is used.
 ASSETS=("$ZIP")
-if [ -f "$ROOT/Resources/update-key.txt" ]; then
+rm -f "$ZIP.sig"
+if ! $UNSIGNED && [ -f "$KEY" ]; then
     SIGNATURE="$ZIP.sig"
     swift Scripts/update-key.swift sign "$ZIP" > "$SIGNATURE" || fail "The archive could not be signed."
-    swift Scripts/update-key.swift verify "$ZIP" "$SIGNATURE" "$ROOT/Resources/update-key.txt" \
+    swift Scripts/update-key.swift verify "$ZIP" "$SIGNATURE" "$KEY" \
         || fail "The signature does not match Resources/update-key.txt."
     ASSETS+=("$SIGNATURE")
     echo "Signed   $SIGNATURE"
 else
-    echo "No update key (Scripts/update-key.swift generate): Bee will not install this release by itself."
+    echo "Not signed: Bee will not install this release by itself."
 fi
 
 # The notes are the section of this version in CHANGELOG.md, then how to install.

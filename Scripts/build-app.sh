@@ -22,7 +22,13 @@ APP="$OUT/Bee.app"
 VERSION="$("$ROOT/Scripts/version.sh")"
 
 cd "$ROOT"
-swift build -c "$CONFIG" --arch arm64 --product Bee 2>&1 | grep -v "search path" || true
+# A failed build stops here: the binary of an earlier build must never be packaged under a new version.
+if ! BUILD_LOG="$(swift build -c "$CONFIG" --arch arm64 --product Bee 2>&1)"; then
+    echo "$BUILD_LOG" | grep -v "search path" >&2 || true
+    echo "Build failed" >&2
+    exit 1
+fi
+echo "$BUILD_LOG" | grep -v "search path" || true
 BINARY="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/Bee"
 [ -x "$BINARY" ] || { echo "Build failed: $BINARY not found" >&2; exit 1; }
 

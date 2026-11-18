@@ -22,6 +22,9 @@ struct UpdateView: View {
                 available(release, updates: updates)
             case .installing(_, let step):
                 busy(step.description)
+                if step == .downloading {
+                    actions { Button("Cancel") { updates.cancelInstall() }.keyboardShortcut(.cancelAction) }
+                }
             case .installed(let release):
                 headline("Bee \(release.version.description) is in place")
                 words("Bee restarts now.")
@@ -67,7 +70,7 @@ struct UpdateView: View {
             Button("Not Now") { dismiss() }
                 .keyboardShortcut(.cancelAction)
             if blocker == nil {
-                Button("Install and Restart") { Task { await updates.install() } }
+                Button("Install and Restart") { updates.startInstall() }
                     .keyboardShortcut(.defaultAction)
             } else {
                 Button("Open Release Page") { openURL(release.pageURL) }
@@ -95,8 +98,10 @@ struct UpdateView: View {
                 Button("Open Release Page") { openURL(page) }
             }
             Button("Try Again") {
-                Task {
-                    if release == nil { await updates.check() } else { await updates.install() }
+                if release == nil {
+                    Task { await updates.check() }
+                } else {
+                    updates.startInstall()
                 }
             }
             .keyboardShortcut(.defaultAction)

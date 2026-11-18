@@ -80,9 +80,18 @@ final class UpdateModel {
     }
 
     private(set) var phase: Phase = .idle
+    /// When the update server last answered a check.
+    @ObservationIgnored private(set) var lastAnswer: Date?
 
     @ObservationIgnored private let restartsAfterInstall: Bool
-    @ObservationIgnored private let session = URLSession(configuration: .ephemeral)
+    /// No cookies, no cache. A request that stalls is dropped after 30 s, a download after 5 min in all.
+    @ObservationIgnored private let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 300
+        return URLSession(configuration: configuration)
+    }()
+    @ObservationIgnored private var installTask: Task<Void, Never>?
     /// Called right before the application is replaced, so nothing unsaved is lost.
     @ObservationIgnored var beforeReplacing: () async -> Void = {}
 
@@ -110,11 +119,14 @@ final class UpdateModel {
 
     // MARK: Checking
 
-    func check() async {
+    /// - Parameter quietly: asked by Bee itself rather than by the person: a check that does not go
+    ///   through then leaves what was known untouched.
+    func check(quietly: Bool = false) async {
         switch phase {
         case .checking, .installing, .installed: return
         default: break
         }
+        let known = phase
         guard let installed = installedVersion, let feed = UpdateSource.feed else {
             phase = .failed(message: "This copy of Bee has no version, so it cannot be compared with the latest one.", release: nil)
             return
@@ -127,12 +139,28 @@ final class UpdateModel {
                 trustsAnyLocation: UpdateSource.isLocalFeed
             )
             phase = release.version > installed ? .available(release) : .upToDate
+            lastAnswer = Date()
         } catch {
-            phase = .failed(message: Self.describe(error), release: nil)
+            phase = quietly ? known : .failed(message: Self.describe(error), release: nil)
         }
     }
 
     // MARK: Installing
+
+    /// Starts the installation; ``cancelInstall()`` stops it while it downloads.
+    func startInstall() {
+        guard installTask == nil else { return }
+        installTask = Task { [weak self] in
+            await self?.install()
+            self?.installTask = nil
+        }
+    }
+
+    /// Stops a download in progress. Once the new version is being put in place, nothing is stopped.
+    func cancelInstall() {
+        guard case .installing(_, .downloading) = phase else { return }
+        installTask?.cancel()
+    }
 
     func install() async {
         let release: AvailableRelease
@@ -149,13 +177,15 @@ final class UpdateModel {
             guard let publicKey = UpdateSource.publicKey, let archive = release.archive, let signature = release.signature,
                   let identifier = Bundle.main.bundleIdentifier
             else { throw Failure("This release cannot be installed by Bee itself.") }
-            guard archive.size <= UpdateSource.archiveSizeLimit else {
-                throw Failure("The update is larger than any version of Bee should be.")
+            guard archive.size > 0, archive.size <= UpdateSource.archiveSizeLimit else {
+                throw Failure("The size the release gives for its archive is not the size of a version of Bee.")
             }
 
             phase = .installing(release, .downloading)
             let signatureText = String(decoding: try await fetch(signature.url, limit: 4096), as: UTF8.self)
-            let data = try await fetch(archive.url, limit: UpdateSource.archiveSizeLimit)
+            // Never more than the release said: the download stops at the first byte beyond.
+            let data = try await fetch(archive.url, limit: archive.size)
+            guard data.count == archive.size else { throw Failure("The download is incomplete. Try again.") }
 
             phase = .installing(release, .verifying)
             let app = Bundle.main.bundleURL
@@ -190,7 +220,8 @@ final class UpdateModel {
             try UpdateInstaller.openAfterExit(of: ProcessInfo.processInfo.processIdentifier, app: app)
             NSApp.terminate(nil)
         } catch {
-            phase = .failed(message: Self.describe(error), release: release)
+            let wasCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+            phase = wasCancelled ? .available(release) : .failed(message: Self.describe(error), release: release)
         }
     }
 
@@ -210,7 +241,8 @@ final class UpdateModel {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.setValue("Bee/\(installedVersion?.description ?? "0")", forHTTPHeaderField: "User-Agent")
         if let mediaType { request.setValue(mediaType, forHTTPHeaderField: "Accept") }
-        let (data, response) = try await session.data(for: request)
+        // Read as it arrives, so an answer larger than expected is dropped instead of filling the memory.
+        let (bytes, response) = try await session.bytes(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw Failure(
                 http.statusCode == 403 || http.statusCode == 429
@@ -218,7 +250,14 @@ final class UpdateModel {
                     : "The update server answered with status \(http.statusCode). Try again later."
             )
         }
-        guard data.count <= limit else { throw Failure("The update server sent more than expected.") }
+        let tooLarge = Failure("The update server sent more than expected.")
+        guard response.expectedContentLength <= Int64(limit) else { throw tooLarge }
+        var data = Data()
+        data.reserveCapacity(max(0, min(Int(response.expectedContentLength), limit)))
+        for try await byte in bytes {
+            guard data.count < limit else { throw tooLarge }
+            data.append(byte)
+        }
         return data
     }
 

@@ -57,6 +57,7 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 - A newer release is announced with its notes. Bee installs it by itself only when the release holds `Bee-<version>.zip` and its signature `Bee-<version>.zip.sig`, and that signature is valid for the public key shipped in the application (`Resources/update-key.txt`, Ed25519). The archive is checked before it is unpacked: the update is not quarantined by macOS, so this signature is what stands between a published file and code running on the Mac.
 - The new version is then checked again (identifier, version, code signature of every file), put in place of the running copy, and Bee restarts. A copy without the public key, or one that macOS runs from the download folder, offers the release page instead.
 - While Bee is signed ad hoc, each new version has a new signature: after an update macOS asks once to let it read `Bee Vault Key`.
+- What the signature does not cover: which release is the latest. Someone in control of the repository could hide newer versions, or offer again an older genuine one that is still newer than the installed copy. They cannot make Bee install anything the release key did not sign.
 
 ## Scripts
 
@@ -89,7 +90,7 @@ Once, before the first signed release, create the key updates are signed with:
 swift Scripts/update-key.swift generate
 ```
 
-It stores the private key in the login Keychain (`Bee Update Signing Key`, read only after macOS asks) and writes the public key to `Resources/update-key.txt`, to commit. Keep a copy of the private key somewhere safe: without it, the copies of Bee already installed cannot be given another update by themselves; with it, anyone can sign one.
+It stores the private key in the login Keychain (`Bee Update Signing Key`, read only after macOS asks) and writes the public key to `Resources/update-key.txt`, to commit. Keep a copy of the private key somewhere safe (Keychain Access shows it as the password of that item): without it, the copies of Bee already installed cannot be given another update by themselves; with it, anyone can sign one. The key is never replaced: on another Mac, `swift Scripts/update-key.swift import <file>` puts the saved copy back, and `generate` refuses to run while `Resources/update-key.txt` exists.
 
 Then, for each version:
 
@@ -101,7 +102,7 @@ Then, for each version:
 Scripts/release.sh
 ```
 
-4. Publish the tag, the archive and its signature as a GitHub release:
+4. Publish the tag, the archive and its signature as a GitHub release (refused without the release key, unless `--unsigned` is given):
 
 ```bash
 Scripts/release.sh --publish

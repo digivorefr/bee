@@ -233,7 +233,8 @@ final class AppModel {
     @ObservationIgnored private var copiedSecretChangeCount: Int?
 
     private static let saveDelay: Duration = .milliseconds(600)
-    private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
+    /// Shorter than a day, so someone who opens Bee every morning is asked every morning.
+    private static let updateCheckInterval: TimeInterval = 20 * 60 * 60
     private static let revealGracePeriod: TimeInterval = 30
     private static let clipboardLifetime: Duration = .seconds(60)
 
@@ -271,20 +272,27 @@ final class AppModel {
         }
     }
 
+    /// Asks about updates now if it is due, then again every hour: a copy left open for weeks is told too.
+    func keepCheckingForUpdates() async {
+        while !Task.isCancelled {
+            await checkForUpdatesIfDue()
+            try? await Task.sleep(for: .seconds(60 * 60))
+        }
+    }
+
     /// Asks whether a newer version is published, at most once a day, and says so when there is one.
     func checkForUpdatesIfDue() async {
         guard isLoaded, settings.checksForUpdates, updates.checksAutomatically(isEphemeral: environment.isEphemeral) else { return }
         if let last = settings.lastUpdateCheck, Date().timeIntervalSince(last) < Self.updateCheckInterval { return }
-        await updates.check()
-        switch updates.phase {
-        case .available(let release):
-            settings.lastUpdateCheck = Date()
+        let asked = Date()
+        await updates.check(quietly: true)
+        guard updates.lastAnswer.map({ $0 >= asked }) == true else {
+            // Offline or refused: nothing is said, and the question is asked again within the hour.
+            return
+        }
+        settings.lastUpdateCheck = asked
+        if case .available(let release) = updates.phase {
             notice = Notice(kind: .info, message: "Bee \(release.version) is available.", action: .showUpdate)
-        case .upToDate:
-            settings.lastUpdateCheck = Date()
-        default:
-            // Offline or refused: nothing is said, and the question is asked again at the next launch.
-            break
         }
     }
 
