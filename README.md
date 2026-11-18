@@ -8,7 +8,9 @@ Swift 6 · SwiftUI + AppKit · arm64 · macOS 26+ · no third-party dependency.
 
 Download `Bee-<version>.zip` from the [latest release](https://github.com/digivorefr/bee/releases/latest), open it and move **Bee** to Applications. Bee needs a Mac with Apple silicon and macOS 26 or later.
 
-Bee is not notarized by Apple yet, so macOS refuses to open it the first time: go to **System Settings › Privacy & Security**, scroll down to **Security** and click **Open Anyway**. This is asked once per version.
+Bee is not notarized by Apple yet, so macOS refuses to open it the first time: go to **System Settings › Privacy & Security**, scroll down to **Security** and click **Open Anyway**. This is asked once per version downloaded by hand.
+
+From version 1.1.0, Bee updates itself (see [Updates](#updates)).
 
 ## Build and run
 
@@ -29,7 +31,7 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 | `Tests/BeeCoreTests` | Swift Testing suites for the core |
 | `design/language.md` | The design language every screen follows |
 | `CHANGELOG.md` | What changed in each version; its first entry is the version of the build, and Bee shows it under Help › What's New in Bee |
-| `Scripts/` | `build-app.sh` (bundle), `release.sh` (download archive and GitHub release), `version.sh`, `make-icon.swift` (icon) |
+| `Scripts/` | `build-app.sh` (bundle), `release.sh` (download archive and GitHub release), `update-key.swift` (release signing key), `version.sh`, `make-icon.swift` (icon) |
 
 ## Where data lives
 
@@ -48,6 +50,13 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 - A script that copies a secret into another variable makes that variable secret too; turning a secret back into a plain value clears it unless the person just authenticated.
 - Revealing or copying a secret asks for Touch ID or the account password; a copied secret is marked concealed and cleared after a minute.
 - Rebuilding the app changes its signature: macOS then asks once to let the new build read `Bee Vault Key`.
+
+## Updates
+
+- Once a day, and on Bee › Check for Updates…, Bee asks GitHub for the latest release of this repository (`api.github.com/repos/digivorefr/bee/releases/latest`). The request carries Bee's version and nothing else. Settings › Updates turns the daily question off.
+- A newer release is announced with its notes. Bee installs it by itself only when the release holds `Bee-<version>.zip` and its signature `Bee-<version>.zip.sig`, and that signature is valid for the public key shipped in the application (`Resources/update-key.txt`, Ed25519). The archive is checked before it is unpacked: the update is not quarantined by macOS, so this signature is what stands between a published file and code running on the Mac.
+- The new version is then checked again (identifier, version, code signature of every file), put in place of the running copy, and Bee restarts. A copy without the public key, or one that macOS runs from the download folder, offers the release page instead.
+- While Bee is signed ad hoc, each new version has a new signature: after an update macOS asks once to let it read `Bee Vault Key`.
 
 ## Scripts
 
@@ -74,15 +83,25 @@ BEE_DATA_DIR=$(mktemp -d) BEE_SCENARIO="select:Send JSON;send;snapshot:/tmp/bee.
 
 ## Releasing
 
+Once, before the first signed release, create the key updates are signed with:
+
+```bash
+swift Scripts/update-key.swift generate
+```
+
+It stores the private key in the login Keychain (`Bee Update Signing Key`, read only after macOS asks) and writes the public key to `Resources/update-key.txt`, to commit. Keep a copy of the private key somewhere safe: without it, the copies of Bee already installed cannot be given another update by themselves; with it, anyone can sign one.
+
+Then, for each version:
+
 1. Add a section at the top of `CHANGELOG.md`: `## 1.1.0 — 2027-01-31`, then `### Added`, `### Changed` or `### Fixed` with one `- ` line per change, written for the people who use Bee. That heading is the version of the build.
 2. Commit and push.
-3. Package and check the result (`dist/Bee-<version>.zip` holds the application and the license; the notes are that section of the changelog followed by how to install):
+3. Package and check the result (`dist/Bee-<version>.zip` holds the application and the license, `dist/Bee-<version>.zip.sig` its signature, for which the Keychain asks; the notes are that section of the changelog followed by how to install):
 
 ```bash
 Scripts/release.sh
 ```
 
-4. Publish the tag and the archive as a GitHub release:
+4. Publish the tag, the archive and its signature as a GitHub release:
 
 ```bash
 Scripts/release.sh --publish

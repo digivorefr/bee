@@ -112,6 +112,7 @@ private struct VaultLockedBanner: View {
 /// until it is dismissed or replaced.
 private struct NoticeBanner: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -127,6 +128,13 @@ private struct NoticeBanner: View {
                         .foregroundStyle(Theme.ink)
                         .lineLimit(4)
                         .textSelection(.enabled)
+                    if notice.action == .showUpdate {
+                        Button("See Update") {
+                            model.notice = nil
+                            openWindow(id: UpdateModel.windowID)
+                        }
+                        .buttonStyle(OutlineButtonStyle())
+                    }
                     Button {
                         model.notice = nil
                     } label: {
@@ -148,7 +156,7 @@ private struct NoticeBanner: View {
             }
         }
         .task(id: model.notice?.id) {
-            guard let notice = model.notice, notice.kind == .info else { return }
+            guard let notice = model.notice, notice.kind == .info, notice.action == nil else { return }
             try? await Task.sleep(for: ShellMetrics.noticeLifetime)
             if !Task.isCancelled, model.notice?.id == notice.id { model.notice = nil }
         }

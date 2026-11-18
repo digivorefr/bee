@@ -32,6 +32,10 @@ cp "$BINARY" "$APP/Contents/MacOS/Bee"
 [ -f "$ROOT/Resources/Bee.icns" ] && cp "$ROOT/Resources/Bee.icns" "$APP/Contents/Resources/Bee.icns"
 # Shown in the application under Help > What's New in Bee.
 cp "$ROOT/CHANGELOG.md" "$APP/Contents/Resources/CHANGELOG.md"
+# The public half of the key releases are signed with: what lets Bee install an update by itself.
+if [ -f "$ROOT/Resources/update-key.txt" ]; then
+    cp "$ROOT/Resources/update-key.txt" "$APP/Contents/Resources/update-key.txt"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -20,6 +20,9 @@ import SwiftUI
 ///     cmd:<key>   windowshot:<png path>   front
 ///     menu:<menu item title>     shot:<window title>|<png path>
 ///     raw:<body text, \n for a line break>      probe:<samples> (logs the geometry of each editor over time)
+///     updatecheck   updateinstall   updatephase (logs where the update stands)
+///
+/// `BEE_UPDATE_FEED=<url>` and `BEE_UPDATE_PUBLIC_KEY=<base64>` point the updater at a local feed.
 ///
 /// Clicks and shortcuts reach SwiftUI controls only when the app is frontmost: start it with
 /// `open -n dist/Bee.app --env BEE_SCENARIO=… --env BEE_HARNESS_LOG=<file>`.
@@ -220,7 +223,8 @@ enum DebugHarness {
             // Snapshots the window with the given title.
             let parts = argument.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2, let window = NSApp.windows.first(where: { $0.title == parts[0] }) else {
-                return log("shot: no window titled \(parts.first ?? "")")
+                let titles = NSApp.windows.filter(\.isVisible).map(\.title).joined(separator: ", ")
+                return log("shot: no window titled \(parts.first ?? ""); open: \(titles)")
             }
             try? await Task.sleep(for: .milliseconds(350))
             snapshot(to: parts[1], window: window)
@@ -251,6 +255,20 @@ enum DebugHarness {
                 if line != previous { log("probe \(sample): \(line)") }
                 previous = line
                 try? await Task.sleep(for: .milliseconds(40))
+            }
+        case "updatecheck":
+            await model.updates.check()
+        case "updateinstall":
+            await model.updates.install()
+        case "updatephase":
+            switch model.updates.phase {
+            case .idle: log("update: idle")
+            case .checking: log("update: checking")
+            case .upToDate: log("update: up to date")
+            case .available(let release): log("update: available \(release.version) blocker: \(model.updates.installBlocker(for: release) ?? "none")")
+            case .installing(_, let step): log("update: installing, \(step.description)")
+            case .installed(let release): log("update: installed \(release.version)")
+            case .failed(let message, _): log("update: failed, \(message)")
             }
         case "focus":
             let window = mainWindow()

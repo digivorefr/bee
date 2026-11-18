@@ -23,6 +23,7 @@ struct BeeApp: App {
                     #if DEBUG
                     DebugHarness.runIfRequested(model: model)
                     #endif
+                    await model.checkForUpdatesIfDue()
                 }
         }
         .defaultSize(width: 1280, height: 800)
@@ -33,6 +34,13 @@ struct BeeApp: App {
             WhatsNewView()
         }
         .defaultSize(width: 560, height: 640)
+        .windowResizability(.contentMinSize)
+
+        Window(UpdateModel.windowTitle, id: UpdateModel.windowID) {
+            UpdateView()
+                .environment(model)
+        }
+        .defaultSize(width: 520, height: 420)
         .windowResizability(.contentMinSize)
 
         Settings {

@@ -257,11 +257,16 @@ public struct AppSettings: Hashable, Sendable, Codable {
     public var responseLayout: ResponseLayout
     /// The version of Bee that last ran with these settings; `nil` before the first run. Tells an update.
     public var lastRunVersion: String?
+    /// Ask once a day whether a newer version is published.
+    public var checksForUpdates: Bool
+    /// When the last such question was answered.
+    public var lastUpdateCheck: Date?
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
         requireAuthenticationToReveal: Bool = true, historyLimit: Int = 200,
-        responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil
+        responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil,
+        checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -270,11 +275,13 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.historyLimit = historyLimit
         self.responseLayout = responseLayout
         self.lastRunVersion = lastRunVersion
+        self.checksForUpdates = checksForUpdates
+        self.lastUpdateCheck = lastUpdateCheck
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
-        case lastRunVersion
+        case lastRunVersion, checksForUpdates, lastUpdateCheck
     }
 
     public init(from decoder: Decoder) throws {
@@ -288,6 +295,8 @@ public struct AppSettings: Hashable, Sendable, Codable {
         historyLimit = try container.decodeIfPresent(Int.self, forKey: .historyLimit) ?? defaults.historyLimit
         responseLayout = try container.decodeIfPresent(ResponseLayout.self, forKey: .responseLayout) ?? defaults.responseLayout
         lastRunVersion = try container.decodeIfPresent(String.self, forKey: .lastRunVersion)
+        checksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checksForUpdates) ?? defaults.checksForUpdates
+        lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
     }
 }
 

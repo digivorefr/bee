@@ -61,9 +61,13 @@ enum ResponseSection: String, CaseIterable, Hashable, Sendable, Identifiable {
 struct Notice: Identifiable, Equatable {
     enum Kind { case info, error }
 
+    /// What the notice offers to do. A notice with an action stays until it is dismissed.
+    enum Action { case showUpdate }
+
     let id = UUID()
     var kind: Kind
     var message: String
+    var action: Action?
 }
 
 // MARK: - Request session
@@ -213,6 +217,9 @@ final class AppModel {
     var selection: SidebarSelection?
     var notice: Notice?
 
+    /// Whether a newer version exists, and its installation.
+    let updates: UpdateModel
+
     @ObservationIgnored let environment: AppEnvironment
     @ObservationIgnored private let store: WorkspaceStore
     @ObservationIgnored private let transport = URLSessionTransport()
@@ -226,13 +233,16 @@ final class AppModel {
     @ObservationIgnored private var copiedSecretChangeCount: Int?
 
     private static let saveDelay: Duration = .milliseconds(600)
+    private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
     private static let revealGracePeriod: TimeInterval = 30
     private static let clipboardLifetime: Duration = .seconds(60)
 
     init(environment: AppEnvironment = .resolve()) {
         self.environment = environment
+        updates = UpdateModel(restartsAfterInstall: !environment.isEphemeral)
         store = WorkspaceStore(directory: environment.dataDirectory, vault: environment.vault)
         runner = RequestRunner(transport: transport, scripts: JSScriptEngine(transport: transport))
+        updates.beforeReplacing = { [weak self] in await self?.saveNow() }
     }
 
     // MARK: Loading and saving
@@ -258,6 +268,23 @@ final class AppModel {
         }
         if selection == nil, let first = workspace.collections.first?.allRequests.first {
             selection = .request(first.id)
+        }
+    }
+
+    /// Asks whether a newer version is published, at most once a day, and says so when there is one.
+    func checkForUpdatesIfDue() async {
+        guard isLoaded, settings.checksForUpdates, updates.checksAutomatically(isEphemeral: environment.isEphemeral) else { return }
+        if let last = settings.lastUpdateCheck, Date().timeIntervalSince(last) < Self.updateCheckInterval { return }
+        await updates.check()
+        switch updates.phase {
+        case .available(let release):
+            settings.lastUpdateCheck = Date()
+            notice = Notice(kind: .info, message: "Bee \(release.version) is available.", action: .showUpdate)
+        case .upToDate:
+            settings.lastUpdateCheck = Date()
+        default:
+            // Offline or refused: nothing is said, and the question is asked again at the next launch.
+            break
         }
     }
 

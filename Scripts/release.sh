@@ -49,6 +49,20 @@ rm -rf "$CHECK" "$STAGE"
 
 SUM="$(shasum -a 256 "$ZIP" | cut -d ' ' -f 1)"
 
+# Signed with the release key, the archive can be installed by Bee itself (Check for Updates).
+# The Keychain asks before the key is used.
+ASSETS=("$ZIP")
+if [ -f "$ROOT/Resources/update-key.txt" ]; then
+    SIGNATURE="$ZIP.sig"
+    swift Scripts/update-key.swift sign "$ZIP" > "$SIGNATURE" || fail "The archive could not be signed."
+    swift Scripts/update-key.swift verify "$ZIP" "$SIGNATURE" "$ROOT/Resources/update-key.txt" \
+        || fail "The signature does not match Resources/update-key.txt."
+    ASSETS+=("$SIGNATURE")
+    echo "Signed   $SIGNATURE"
+else
+    echo "No update key (Scripts/update-key.swift generate): Bee will not install this release by itself."
+fi
+
 # The notes are the section of this version in CHANGELOG.md, then how to install.
 awk '/^## /{ if (seen) exit; seen = 1; next } seen' CHANGELOG.md | sed -e '/./,$!d' > "$NOTES"
 [ -s "$NOTES" ] || fail "CHANGELOG.md has nothing under version $VERSION."
@@ -68,7 +82,7 @@ echo "Packaged $ZIP"
 echo "Notes    $NOTES"
 
 if $PUBLISH; then
-    gh release create "$TAG" "$ZIP" --target "$(git rev-parse HEAD)" --title "Bee $VERSION" --notes-file "$NOTES"
+    gh release create "$TAG" "${ASSETS[@]}" --target "$(git rev-parse HEAD)" --title "Bee $VERSION" --notes-file "$NOTES"
 else
     echo "Publish with: Scripts/release.sh --publish"
 fi

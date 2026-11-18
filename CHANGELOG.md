@@ -2,6 +2,17 @@
 
 What changed in each version of Bee, newest first. The first version listed is the version the application is built as, and Bee shows this file under Help › What's New in Bee.
 
+## 1.1.0 — 2026-11-18
+
+### Added
+
+- Bee asks GitHub once a day whether a newer version is published, and says so when there is one. Bee › Check for Updates… asks at once; Settings › Updates turns the daily question off.
+- A release signed by the publisher is installed by Bee itself: it downloads the new version, checks its signature, takes its place and restarts.
+
+### Fixed
+
+- A body or script editor no longer jumps between two heights when scroll bars are always shown, as they are with a mouse connected.
+
 ## 1.0.0 — 2026-11-16
 
 First public release.

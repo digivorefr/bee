@@ -50,6 +50,14 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $model.settings.checksForUpdates)
+                Text("Once a day, Bee asks GitHub which version is the latest. Nothing about you or your requests is sent.")
+                    .font(Theme.text(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Secrets") {
                 Toggle(
                     "Require Touch ID or password to reveal a secret",

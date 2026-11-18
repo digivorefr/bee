@@ -31,7 +31,7 @@ struct WhatsNewView: View {
                         .foregroundStyle(Theme.inkSecondary)
                 }
                 ForEach(WhatsNew.changelog.releases) { release in
-                    ReleaseNotes(release: release, isInstalled: release.version == WhatsNew.installedVersion)
+                    ReleaseNotesView(release: release, isInstalled: release.version == WhatsNew.installedVersion)
                 }
             }
             .padding(Theme.Layout.pageInset)
@@ -42,12 +42,22 @@ struct WhatsNewView: View {
     }
 }
 
-private struct ReleaseNotes: View {
+/// The notes of one version: its heading, then its groups of changes.
+struct ReleaseNotesView: View {
     let release: Changelog.Release
-    let isInstalled: Bool
+    var isInstalled = false
+    /// False where the version is already said above the notes.
+    var showsHeading = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
+            if showsHeading { heading }
+            groups
+        }
+        .textSelection(.enabled)
+    }
+
+    private var heading: some View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
                     Text(release.version)
@@ -75,6 +85,10 @@ private struct ReleaseNotes: View {
                         .foregroundStyle(Theme.inkSecondary)
                 }
             }
+    }
+
+    private var groups: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
             ForEach(release.groups, id: \.title) { group in
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     if !group.title.isEmpty {
@@ -97,7 +111,6 @@ private struct ReleaseNotes: View {
                 }
             }
         }
-        .textSelection(.enabled)
     }
 
     private var formattedDay: String? {
@@ -108,8 +121,11 @@ private struct ReleaseNotes: View {
     }
 
     /// Inline Markdown (`code`, **bold**) of a line; the text as written when it does not parse.
+    /// Links are not made clickable: the notes of an update are read before it is known to be genuine.
     private static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        guard var line = try? AttributedString(markdown: text, options: options) else { return AttributedString(text) }
+        line.link = nil
+        return line
     }
 }

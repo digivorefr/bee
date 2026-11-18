@@ -74,6 +74,13 @@ struct BeeCommands: Commands {
                 .disabled(focus?.hasRequest == false)
         }
 
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                openWindow(id: UpdateModel.windowID)
+                Task { await model.updates.check() }
+            }
+        }
+
         CommandGroup(replacing: .help) {
             Button("What’s New in Bee") { openWindow(id: WhatsNew.windowID) }
             if let page = WhatsNew.projectPage {
