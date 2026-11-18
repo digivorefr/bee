@@ -8,6 +8,8 @@ struct BeeApp: App {
     @ViewState private var model: AppModel
 
     init() {
+        // A program that leaves before its answer must not end Bee on the write that follows.
+        signal(SIGPIPE, SIG_IGN)
         let model = AppModel()
         _model = ViewState(initialValue: model)
         AppDelegate.model = model

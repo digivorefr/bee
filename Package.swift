@@ -10,13 +10,21 @@ let package = Package(
     targets: [
         .target(
             name: "BeeCore",
-            path: "Sources/BeeCore"
+            path: "Sources/BeeCore",
+            // libbsm reads the audit token of the process at the other end of the agents' socket.
+            linkerSettings: [.linkedLibrary("bsm")]
         ),
         .executableTarget(
             name: "Bee",
             dependencies: ["BeeCore"],
             path: "Sources/Bee",
             swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
+        // The relay an agent's program starts: MCP on its standard streams, Bee's private socket behind.
+        .executableTarget(
+            name: "bee-mcp",
+            dependencies: ["BeeCore"],
+            path: "Sources/BeeMCP"
         ),
         .testTarget(
             name: "BeeCoreTests",

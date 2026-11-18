@@ -42,7 +42,7 @@ Bee is a quiet desk where a request reads as one document in wire order and its 
 
 ## Lexicon (interface copy, English)
 
-Request · Fork (Merge / Discard / Original) · Method · URL · Path variable · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
+Request · Fork (Merge / Discard / Original) · Agent (Allow / Deny) · Method · URL · Path variable · Parameter · Header · Authorization · Body · Response · Status · Time · Size · Collection · Folder · Environment · Active · Variable · Secret · Pre-request script · Post-response script · Test (Passed / Failed) · History · Send / Cancel · Reveal / Hide.
 
 Sentence case everywhere. Verbs on buttons. Errors say what happened and what to do.
 

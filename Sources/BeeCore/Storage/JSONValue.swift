@@ -2,7 +2,7 @@ import Foundation
 
 /// A JSON document of unknown shape, for formats (Postman) whose fields change type between
 /// versions and exporters.
-enum JSONValue: Equatable, Sendable, Codable {
+public enum JSONValue: Hashable, Sendable, Codable {
     case null
     case bool(Bool)
     case number(Double)
@@ -10,7 +10,7 @@ enum JSONValue: Equatable, Sendable, Codable {
     case array([JSONValue])
     case object([String: JSONValue])
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .null: try container.encodeNil()
@@ -22,7 +22,7 @@ enum JSONValue: Equatable, Sendable, Codable {
         }
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
@@ -39,33 +39,33 @@ enum JSONValue: Equatable, Sendable, Codable {
         }
     }
 
-    subscript(key: String) -> JSONValue? {
+    public subscript(key: String) -> JSONValue? {
         if case .object(let members) = self { return members[key] }
         return nil
     }
 
-    var object: [String: JSONValue]? {
+    public var object: [String: JSONValue]? {
         if case .object(let members) = self { return members }
         return nil
     }
 
-    var array: [JSONValue]? {
+    public var array: [JSONValue]? {
         if case .array(let elements) = self { return elements }
         return nil
     }
 
-    var string: String? {
+    public var string: String? {
         if case .string(let value) = self { return value }
         return nil
     }
 
-    var bool: Bool? {
+    public var bool: Bool? {
         if case .bool(let value) = self { return value }
         return nil
     }
 
     /// The value as the text a person would type: strings as is, numbers and booleans spelled out.
-    var text: String? {
+    public var text: String? {
         switch self {
         case .string(let value):
             value

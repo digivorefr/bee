@@ -203,6 +203,26 @@ public extension Collection {
     @discardableResult
     mutating func update(_ request: RequestItem) -> Bool { replace(.request(request)) }
 
+    /// The collection with `request` standing where the request `originID` is: a fork is read and sent
+    /// from the place of its original. `nil` when the collection has no such request.
+    func placing(_ request: RequestItem, at originID: UUID) -> Collection? {
+        func rewrite(_ nodes: inout [CollectionNode]) -> Bool {
+            for index in nodes.indices {
+                if case .request(let found) = nodes[index], found.id == originID {
+                    nodes[index] = .request(request)
+                    return true
+                }
+                if case .folder(var folder) = nodes[index], rewrite(&folder.items) {
+                    nodes[index] = .folder(folder)
+                    return true
+                }
+            }
+            return false
+        }
+        var placed = self
+        return rewrite(&placed.items) ? placed : nil
+    }
+
     @discardableResult
     mutating func update(_ folder: Folder) -> Bool { replace(.folder(folder)) }
 

@@ -263,12 +263,22 @@ public struct AppSettings: Hashable, Sendable, Codable {
     public var lastUpdateCheck: Date?
     /// The folder where each collection has its file; `nil` for the usual one (`~/Documents/Bee`).
     public var collectionsFolder: String?
+    /// Let AI agents reach Bee through its MCP relay. Off unless the person turns it on.
+    public var agentsEnabled: Bool
+    /// The most an agent may do.
+    public var agentAccess: AgentAccess
+    /// The collections agents may see. None unless the person picks some.
+    public var agentCollections: [UUID]
+    /// The programs the person allowed to connect, by path.
+    public var agentPrograms: [String]
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
         requireAuthenticationToReveal: Bool = true, historyLimit: Int = 200,
         responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil,
-        checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil, collectionsFolder: String? = nil
+        checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil, collectionsFolder: String? = nil,
+        agentsEnabled: Bool = false, agentAccess: AgentAccess = .read, agentCollections: [UUID] = [],
+        agentPrograms: [String] = []
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -280,11 +290,16 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.checksForUpdates = checksForUpdates
         self.lastUpdateCheck = lastUpdateCheck
         self.collectionsFolder = collectionsFolder
+        self.agentsEnabled = agentsEnabled
+        self.agentAccess = agentAccess
+        self.agentCollections = agentCollections
+        self.agentPrograms = agentPrograms
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
         case lastRunVersion, checksForUpdates, lastUpdateCheck, collectionsFolder
+        case agentsEnabled, agentAccess, agentCollections, agentPrograms
     }
 
     public init(from decoder: Decoder) throws {
@@ -301,6 +316,10 @@ public struct AppSettings: Hashable, Sendable, Codable {
         checksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checksForUpdates) ?? defaults.checksForUpdates
         lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
         collectionsFolder = try container.decodeIfPresent(String.self, forKey: .collectionsFolder)
+        agentsEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentsEnabled) ?? false
+        agentAccess = (try? container.decodeIfPresent(AgentAccess.self, forKey: .agentAccess)) ?? .read
+        agentCollections = try container.decodeIfPresent([UUID].self, forKey: .agentCollections) ?? []
+        agentPrograms = try container.decodeIfPresent([String].self, forKey: .agentPrograms) ?? []
     }
 }
 

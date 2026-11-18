@@ -74,6 +74,8 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            AgentSettingsSection()
+
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: $model.settings.checksForUpdates)
                 Text("Once a day, Bee asks GitHub which version is the latest. Nothing about you or your requests is sent.")

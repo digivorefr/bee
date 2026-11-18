@@ -119,6 +119,9 @@ public struct RequestFork: Identifiable, Hashable, Sendable, Codable, SecretCont
     /// It has its own secret slots, so the comparison holds for secret values too.
     public var base: RequestItem
     public var createdAt: Date
+    /// What the agent that suggested the fork calls itself. `nil` for a fork the person made, and from
+    /// the moment they edit one an agent suggested: it is then theirs, and no agent revises it.
+    public var proposedBy: String?
 
     public var id: UUID { item.id }
 
@@ -130,7 +133,7 @@ public struct RequestFork: Identifiable, Hashable, Sendable, Codable, SecretCont
         self.createdAt = createdAt
     }
 
-    private enum CodingKeys: String, CodingKey { case originID, name, item, base, createdAt }
+    private enum CodingKeys: String, CodingKey { case originID, name, item, base, createdAt, proposedBy }
 
     /// Only the fork's request and its original's identifier are needed: the rest has a fallback, so a
     /// file written by another version still opens.
@@ -142,6 +145,7 @@ public struct RequestFork: Identifiable, Hashable, Sendable, Codable, SecretCont
         // Without a base, everything the fork holds counts as its own.
         base = try container.decodeIfPresent(RequestItem.self, forKey: .base) ?? RequestItem(name: item.name)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        proposedBy = try container.decodeIfPresent(String.self, forKey: .proposedBy)
     }
 
     public mutating func forEachSecret(_ body: (UUID, inout String) -> Void) {
@@ -259,11 +263,28 @@ public extension Workspace {
         return fork
     }
 
-    /// Stores the edited request of a fork. Returns false when no fork has that id.
+    /// Stores the request of a fork as the person edited it, which makes a fork an agent suggested their
+    /// own. Returns false when no fork has that id.
     @discardableResult
     mutating func updateFork(_ item: RequestItem) -> Bool {
         guard let index = forks.firstIndex(where: { $0.id == item.id }) else { return false }
+        // What counts as an edit is what a part says, not what only tells rows apart.
+        if RequestPart.allCases.contains(where: { forks[index].item.content(of: $0) != item.content(of: $0) }) {
+            forks[index].proposedBy = nil
+        }
         forks[index].item = item
+        return true
+    }
+
+    /// Stores what an agent suggests in a fork, part by part so the rows and the secret slots of the fork
+    /// stay its own. Returns false when no fork has that id.
+    @discardableResult
+    mutating func suggest(_ changed: RequestItem, inFork forkID: UUID, by agent: String) -> Bool {
+        guard let index = forks.firstIndex(where: { $0.id == forkID }) else { return false }
+        for part in RequestPart.allCases where changed.content(of: part) != forks[index].item.content(of: part) {
+            forks[index].item.take(part, from: changed.duplicated())
+        }
+        forks[index].proposedBy = agent
         return true
     }
 

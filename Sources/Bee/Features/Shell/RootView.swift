@@ -18,6 +18,11 @@ struct RootView: View {
                     if model.isVaultLocked { VaultLockedBanner() }
                 }
                 .overlay(alignment: .bottom) { NoticeBanner() }
+                // Only its buttons answer a question: when one question takes the place of another, the sheet
+                // going away says nothing of the next one.
+                .sheet(item: Binding(get: { model.agents.question }, set: { _ in })) { question in
+                    AgentQuestionSheet(question: question).environment(model)
+                }
                 .sheet(isPresented: Binding(
                     get: { ShellState.shared.mergingFork != nil },
                     set: { if !$0 { ShellState.shared.mergingFork = nil } }

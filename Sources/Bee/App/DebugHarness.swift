@@ -24,6 +24,9 @@ import SwiftUI
 ///     fork (forks the selected request)   selectfork:<fork name>   mergesheet   forkmerge   forkdiscard
 ///     sheetshot:<png path> (the sheet attached to the main window)   delete (the selected request)
 ///     keepfork (turns the selected fork into a request)
+///     agents:read|run|propose (opens every collection to agents)   agentquestion (logs the question on screen)
+///     agentanswer:deny|once|untilquit (answers it)                 agentlog (logs what agents did)
+///     agentwait (until a question is on screen)   agentsoff   waitfile:<path> (until the file exists)
 ///
 /// `BEE_UPDATE_FEED=<url>` and `BEE_UPDATE_PUBLIC_KEY=<base64>` point the updater at a local feed.
 ///
@@ -285,6 +288,30 @@ enum DebugHarness {
         case "forkdiscard":
             guard let fork = model.selectedFork else { return log("forkdiscard: no fork selected") }
             model.discardFork(fork.id)
+        case "agents":
+            model.settings.agentAccess = AgentAccess(rawValue: argument) ?? .propose
+            model.settings.agentCollections = model.workspace.collections.map(\.id)
+            model.settings.agentsEnabled = true
+            log("agents: listening \(model.agents.isListening)")
+        case "agentsoff":
+            model.settings.agentsEnabled = false
+        case "agentwait":
+            let deadline = Date().addingTimeInterval(15)
+            while model.agents.question == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        case "waitfile":
+            let deadline = Date().addingTimeInterval(30)
+            while !FileManager.default.fileExists(atPath: argument), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        case "agentquestion":
+            guard let question = model.agents.question else { return log("agent question: none") }
+            log("agent question: \(question.title) | \(question.detail.replacingOccurrences(of: "\n", with: " / "))")
+            if let content = question.content { log("agent question shows: \(content.replacingOccurrences(of: "\n", with: " / "))") }
+        case "agentanswer":
+            guard let question = model.agents.question else { return log("agentanswer: no question") }
+            // As a person would: once the question has settled on screen.
+            try? await Task.sleep(for: .milliseconds(900))
+            model.agents.resolve(question.id, argument == "deny" ? .deny : argument == "untilquit" ? .untilQuit : .once)
+        case "agentlog":
+            for entry in model.agents.activity.reversed() { log("agent: \(entry.program) \(entry.tool) \(entry.outcome)") }
         case "updatecheck":
             await model.updates.check()
         case "updateinstall":

@@ -23,7 +23,7 @@ VERSION="$("$ROOT/Scripts/version.sh")"
 
 cd "$ROOT"
 # A failed build stops here: the binary of an earlier build must never be packaged under a new version.
-if ! BUILD_LOG="$(swift build -c "$CONFIG" --arch arm64 --product Bee 2>&1)"; then
+if ! BUILD_LOG="$(swift build -c "$CONFIG" --arch arm64 --product Bee 2>&1 && swift build -c "$CONFIG" --arch arm64 --product bee-mcp 2>&1)"; then
     echo "$BUILD_LOG" | grep -v "search path" >&2 || true
     echo "Build failed" >&2
     exit 1
@@ -35,6 +35,10 @@ BINARY="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/Bee"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/Bee"
+# The relay AI agents start to reach Bee (MCP).
+RELAY="$(dirname "$BINARY")/bee-mcp"
+[ -x "$RELAY" ] || { echo "Build failed: $RELAY not found" >&2; exit 1; }
+cp "$RELAY" "$APP/Contents/MacOS/bee-mcp"
 [ -f "$ROOT/Resources/Bee.icns" ] && cp "$ROOT/Resources/Bee.icns" "$APP/Contents/Resources/Bee.icns"
 # Shown in the application under Help > What's New in Bee.
 cp "$ROOT/CHANGELOG.md" "$APP/Contents/Resources/CHANGELOG.md"

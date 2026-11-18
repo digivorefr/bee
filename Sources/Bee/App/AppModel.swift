@@ -209,6 +209,7 @@ final class AppModel {
                 return
             }
             persistSettings()
+            agents.settingsChanged()
         }
     }
     private(set) var history: [HistoryEntry] = []
@@ -219,6 +220,8 @@ final class AppModel {
 
     /// Whether a newer version exists, and its installation.
     let updates: UpdateModel
+    /// What AI agents may reach through the MCP relay, and the questions they raise.
+    let agents = AgentModel()
 
     @ObservationIgnored let environment: AppEnvironment
     @ObservationIgnored private let store: WorkspaceStore
@@ -246,6 +249,7 @@ final class AppModel {
         store = WorkspaceStore(directory: environment.dataDirectory, vault: environment.vault)
         runner = RequestRunner(transport: transport, scripts: JSScriptEngine(transport: transport))
         updates.beforeReplacing = { [weak self] in await self?.saveNow() }
+        agents.model = self
     }
 
     // MARK: Loading and saving
@@ -272,6 +276,7 @@ final class AppModel {
         if !isVaultLocked { workspace.forksFollowOriginals() }
         history = await store.loadHistory()
         isLoaded = true
+        agents.settingsChanged()
         // Every collection gets its file, and what the folder brought in is kept here.
         if loaded.isFirstLaunch || reading?.changed == true { scheduleSave() } else { await writeCollectionFiles() }
         if let warning = reading?.warnings.first { notice = Notice(kind: .error, message: warning) }
@@ -434,6 +439,14 @@ final class AppModel {
         }
     }
 
+    /// True when one request only has this identifier in all of Bee: no other collection, fork or one-off
+    /// request answers to it.
+    func holdsOnce(_ requestID: UUID) -> Bool {
+        let inCollections = workspace.collections.reduce(0) { $0 + $1.allRequests.count { $0.id == requestID } }
+        let elsewhere = workspace.forks.count { $0.id == requestID } + workspace.scratchRequests.count { $0.id == requestID }
+        return inCollections + elsewhere == 1
+    }
+
     // MARK: Sessions
 
     /// The live session of a request, created on first use. `nil` when the request no longer exists.
@@ -558,8 +571,13 @@ final class AppModel {
 
     /// The variables visible to a request of the given collection, for placeholders in editors.
     func variableContext(collectionID: UUID?) -> VariableContext {
+        variableContext(collectionID: collectionID, environmentID: workspace.activeEnvironmentID)
+    }
+
+    /// The variables a request reads when it is sent with the given environment, active or not.
+    func variableContext(collectionID: UUID?, environmentID: UUID?) -> VariableContext {
         VariableContext(
-            environment: workspace.activeEnvironment?.variables ?? [],
+            environment: workspace.environments.first { $0.id == environmentID }?.variables ?? [],
             collection: workspace.collections.first { $0.id == collectionID }?.variables ?? [],
             globals: workspace.globals
         )
@@ -657,6 +675,31 @@ final class AppModel {
 
     func renameFork(_ forkID: UUID, to name: String) {
         mutate { $0.renameFork(forkID, to: name) }
+    }
+
+    /// A fork holding a change an agent suggests. It is not selected: the person goes to it when they
+    /// want to.
+    func proposeFork(of requestID: UUID, named name: String, changed: RequestItem, by agent: String) -> UUID? {
+        guard !isVaultLocked else { return nil }
+        var created: UUID?
+        mutate { workspace in
+            guard let fork = workspace.addFork(of: requestID, name: name) else { return }
+            workspace.suggest(changed, inFork: fork.id, by: agent)
+            created = fork.id
+        }
+        return created
+    }
+
+    /// What an agent changes in a fork an agent suggested. False when it is no longer one to revise: the
+    /// person edited it, it is being sent, or it is gone.
+    func reviseFork(_ forkID: UUID, named name: String, changed: RequestItem, by agent: String) -> Bool {
+        guard !isVaultLocked, workspace.fork(id: forkID)?.proposedBy != nil, sessions[forkID]?.isSending != true else { return false }
+        mutate { workspace in
+            workspace.suggest(changed, inFork: forkID, by: agent)
+            workspace.renameFork(forkID, to: name)
+        }
+        if let session = sessions[forkID] { refresh(session) }
+        return true
     }
 
     /// Removes a fork; its original is not touched.
@@ -912,13 +955,32 @@ final class AppModel {
     // MARK: Sending
 
     func send(_ session: RequestSession) {
+        send(session, with: workspace.activeEnvironmentID)
+    }
+
+    /// What one send brought back, as it was when it ended: another send of the same request, or the
+    /// person revealing what the response hides, does not change it.
+    nonisolated struct Sent: Sendable {
+        var outcome: RunOutcome
+        /// The response with every secret known to the run masked.
+        var masked: HTTPResponse?
+        var receivedAt: Date
+        var environmentName: String?
+    }
+
+    /// Sends with the given environment, which need not be the active one (an agent names the one it
+    /// sends with): the one the person works with stays as it is. `done` is told what this send brought
+    /// back, and nothing when the request was already being sent.
+    func send(_ session: RequestSession, with environmentID: UUID?, done: ((Sent) -> Void)? = nil) {
         guard !session.isSending else { return }
+        var sent = workspace
+        sent.activeEnvironmentID = environmentID
         // A fork is sent from the place of its original: same folders, authorization and scripts.
         let input = RunInput(
-            item: session.item, collectionID: session.collectionID, workspace: workspace, settings: settings,
+            item: session.item, collectionID: session.collectionID, workspace: sent, settings: settings,
             placeID: workspace.fork(id: session.id)?.originID
         )
-        let environmentName = workspace.activeEnvironment?.name
+        let environmentName = sent.activeEnvironment?.name
         session.isSending = true
         session.sendStartedAt = Date()
         session.task = Task { [weak self, runner] in
@@ -935,10 +997,13 @@ final class AppModel {
             // it is then never used to name a saved file.
             if let sent = outcome.sentRequest?.url, sent.contains(Redactor.mask) { session.shownResponse?.finalURL = nil }
             session.outcome = outcome
-            session.receivedAt = Date()
+            let receivedAt = Date()
+            session.receivedAt = receivedAt
             session.sentEnvironmentName = environmentName
+            done?(Sent(outcome: outcome, masked: shown, receivedAt: receivedAt, environmentName: environmentName))
             if !outcome.variableChanges.isEmpty {
-                mutate { $0.apply(outcome.variableChanges, collectionID: session.collectionID) }
+                // To the environment the scripts ran with, whichever is active by now.
+                mutate { $0.apply(outcome.variableChanges, collectionID: session.collectionID, environmentID: environmentID) }
             }
             record(outcome.historyEntry)
         }
@@ -949,17 +1014,14 @@ final class AppModel {
     }
 
     /// A copy of the response where every secret known to the run is masked in headers and in a
-    /// textual body. Binary bodies are left as received.
+    /// textual body, whatever its charset. Binary bodies are left as received.
     nonisolated static func masking(_ response: HTTPResponse?, with redactor: Redactor) -> HTTPResponse? {
         guard var response, !redactor.isEmpty else { return response }
         if let address = response.finalURL?.absoluteString, redactor.redact(address) != address {
             response.finalURL = nil
         }
         response.headers = response.headers.map { HeaderEntry(name: $0.name, value: redactor.redact($0.value)) }
-        if !response.body.prefix(1024).contains(0), let text = String(data: response.body, encoding: .utf8) {
-            let masked = redactor.redact(text)
-            if masked != text { response.body = Data(masked.utf8) }
-        }
+        response.body = redactor.redact(body: response.body)
         return response
     }
 

@@ -64,41 +64,58 @@ public struct Redactor: Sendable {
     public func redact(_ text: String) -> String {
         guard !needles.isEmpty, !text.isEmpty else { return text }
         var source = text
-        let redacted: String? = source.withUTF8 { bytes in
-            var output: [UInt8] = []
-            var copied = 0
-            var maskStart = -1
-            var maskEnd = -1
-
-            func closeMask() {
-                if output.isEmpty { output.reserveCapacity(bytes.count) }
-                output.append(contentsOf: bytes[copied..<maskStart])
-                output.append(contentsOf: Self.maskBytes)
-                copied = maskEnd
-                maskStart = -1
-            }
-
-            var index = 0
-            while index < bytes.count {
-                if maskStart >= 0, index >= maskEnd { closeMask() }
-                let byte = bytes[index]
-                if canStartMatch[Int(byte)], let end = matchEnd(in: bytes, at: index, first: byte) {
-                    if maskStart < 0 {
-                        maskStart = index
-                        maskEnd = end
-                    } else if end > maskEnd {
-                        maskEnd = end
-                    }
-                }
-                index += 1
-            }
-            if maskStart >= 0 { closeMask() }
-            guard copied > 0 || !output.isEmpty else { return nil }
-            output.append(contentsOf: bytes[copied...])
-            return String(decoding: output, as: UTF8.self)
-        }
-        return redacted ?? text
+        let redacted = source.withUTF8 { masked($0, with: Self.maskBytes) }
+        return redacted.map { String(decoding: $0, as: UTF8.self) } ?? text
     }
+
+    /// The bytes with every occurrence of every secret replaced by `mask`, or `nil` when there is none.
+    /// The bytes are scanned as they are: they need not be valid text in any charset.
+    private func masked(_ bytes: UnsafeBufferPointer<UInt8>, with mask: [UInt8]) -> [UInt8]? {
+        var output: [UInt8] = []
+        var copied = 0
+        var maskStart = -1
+        var maskEnd = -1
+
+        func closeMask() {
+            if output.isEmpty { output.reserveCapacity(bytes.count) }
+            output.append(contentsOf: bytes[copied..<maskStart])
+            output.append(contentsOf: mask)
+            copied = maskEnd
+            maskStart = -1
+        }
+
+        var index = 0
+        while index < bytes.count {
+            if maskStart >= 0, index >= maskEnd { closeMask() }
+            let byte = bytes[index]
+            if canStartMatch[Int(byte)], let end = matchEnd(in: bytes, at: index, first: byte) {
+                if maskStart < 0 {
+                    maskStart = index
+                    maskEnd = end
+                } else if end > maskEnd {
+                    maskEnd = end
+                }
+            }
+            index += 1
+        }
+        if maskStart >= 0 { closeMask() }
+        guard copied > 0 || !output.isEmpty else { return nil }
+        output.append(contentsOf: bytes[copied...])
+        return output
+    }
+
+    /// A response body with every secret masked, when it is text. A body that is not valid UTF-8 (another
+    /// charset, a stray byte) is text all the same: it is read byte for byte, and masked with a mask that
+    /// any charset can spell. A body with a zero byte near its start is taken for binary and left as it is.
+    public func redact(body: Data) -> Data {
+        guard !needles.isEmpty, !body.prefix(1024).contains(0) else { return body }
+        let mask = String(data: body, encoding: .utf8) != nil ? Self.maskBytes : Array(Self.plainMask.utf8)
+        let masked = body.withUnsafeBytes { masked($0.bindMemory(to: UInt8.self), with: mask) }
+        return masked.map { Data($0) } ?? body
+    }
+
+    /// The mask in a text whose charset Bee does not know.
+    public static let plainMask = "******"
 
     // MARK: Matching
 
@@ -187,6 +204,12 @@ public struct Redactor: Sendable {
     private static func variants(of secret: String) -> Set<[UInt8]> {
         let bytes = Array(secret.utf8)
         var variants: Set<[UInt8]> = [bytes]
+        // A server may answer in another charset: the secret as UTF-16 spells it, and as Latin-1 does when
+        // that differs from UTF-8.
+        let units = Array(secret.utf16)
+        variants.insert(units.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] })
+        variants.insert(units.flatMap { [UInt8($0 >> 8), UInt8($0 & 0xFF)] })
+        if let latin = secret.data(using: .isoLatin1) { variants.insert(Array(latin)) }
         for unicodeEscape in [UnicodeEscape.none, .lowercase, .uppercase] {
             for escapesSlash in [false, true] {
                 variants.insert(Array(jsonEscaped(secret, escapesSlash: escapesSlash, unicodeEscape: unicodeEscape).utf8))

@@ -395,6 +395,12 @@ public extension Workspace {
     /// Applies what scripts changed. Environment changes go to the active environment, collection
     /// changes to the given collection; a change whose target is missing is ignored.
     mutating func apply(_ changes: [VariableChange], collectionID: UUID?) {
+        apply(changes, collectionID: collectionID, environmentID: activeEnvironmentID)
+    }
+
+    /// The same, for a request sent with an environment that is not, or is no longer, the active one:
+    /// what its scripts changed in the environment goes to the one they ran with.
+    mutating func apply(_ changes: [VariableChange], collectionID: UUID?, environmentID: UUID?) {
         for change in changes {
             switch change.scope {
             case .local:
@@ -402,7 +408,7 @@ public extension Workspace {
             case .global:
                 Self.apply(change, to: &globals)
             case .environment:
-                guard let index = environments.firstIndex(where: { $0.id == activeEnvironmentID }) else { continue }
+                guard let index = environments.firstIndex(where: { $0.id == environmentID }) else { continue }
                 Self.apply(change, to: &environments[index].variables)
             case .collection:
                 guard let index = collections.firstIndex(where: { $0.id == collectionID }) else { continue }
