@@ -50,6 +50,30 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Collections") {
+                LabeledContent("Folder") {
+                    VStack(alignment: .trailing, spacing: Theme.Space.s) {
+                        Text((model.collectionsFolderURL.path as NSString).abbreviatingWithTildeInPath)
+                            .font(Theme.mono(Theme.Size.caption))
+                            .foregroundStyle(Theme.inkSecondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .multilineTextAlignment(.trailing)
+                            .textSelection(.enabled)
+                        HStack(spacing: Theme.Space.s) {
+                            Button("Choose…") { chooseCollectionsFolder() }
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([model.collectionsFolderURL])
+                            }
+                        }
+                    }
+                }
+                Text("Each collection has a file there, in Postman's format, kept up to date: send it as it is, or drop a file in to see its collection. Secrets and the values of variables are never written in it. A new folder is used the next time Bee opens.")
+                    .font(Theme.text(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: $model.settings.checksForUpdates)
                 Text("Once a day, Bee asks GitHub which version is the latest. Nothing about you or your requests is sent.")
@@ -93,6 +117,17 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: ShellMetrics.settingsWidth)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func chooseCollectionsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = model.collectionsFolderURL
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.settings.collectionsFolder = url.path
     }
 
     private var timeout: Binding<TimeInterval> {

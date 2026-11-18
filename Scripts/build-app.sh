@@ -68,6 +68,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         <!-- An API client must reach plain-HTTP and self-signed development servers. -->
         <key>NSAllowsArbitraryLoads</key><true/>
     </dict>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Bee keeps a file for each of your collections in Documents/Bee, so you can share them.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Bee sends the requests you compose to servers on your local network.</string>
     <key>NSHumanReadableCopyright</key><string>Copyright 2026 Pierre Bonnin. PolyForm Noncommercial License 1.0.0.</string>

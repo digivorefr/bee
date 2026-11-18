@@ -9,6 +9,9 @@ What changed in each version of Bee, newest first. The first version listed is t
 - Forks: try changes on a request of a collection without touching it (Request › Fork). A fork is kept on this Mac only and has a page of its own colour. The parts it has not changed follow the original.
 - A fork is merged into its original part by part, with a choice where both changed; it can also be kept as a new request, or discarded. A request can have as many forks as needed.
 
+- Each collection has a file in `~/Documents/Bee`, in Postman's Collection v2.1 format, kept up to date as the collection changes. Send the file as it is; drop one in the folder and its collection appears; edit it elsewhere and Bee takes the change in. Settings › Collections chooses another folder.
+- A collection file never holds a secret nor the value of a variable: it holds the names of the variables, and marks where a secret goes. What Bee does not model in a file written by Postman (saved responses, other kinds of authorization, descriptions) is kept as it was.
+
 ### Fixed
 
 - A GET request sent with a body now says why macOS refuses to send it.

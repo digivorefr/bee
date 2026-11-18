@@ -261,12 +261,14 @@ public struct AppSettings: Hashable, Sendable, Codable {
     public var checksForUpdates: Bool
     /// When the last such question was answered.
     public var lastUpdateCheck: Date?
+    /// The folder where each collection has its file; `nil` for the usual one (`~/Documents/Bee`).
+    public var collectionsFolder: String?
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
         requireAuthenticationToReveal: Bool = true, historyLimit: Int = 200,
         responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil,
-        checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil
+        checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil, collectionsFolder: String? = nil
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -277,11 +279,12 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.lastRunVersion = lastRunVersion
         self.checksForUpdates = checksForUpdates
         self.lastUpdateCheck = lastUpdateCheck
+        self.collectionsFolder = collectionsFolder
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
-        case lastRunVersion, checksForUpdates, lastUpdateCheck
+        case lastRunVersion, checksForUpdates, lastUpdateCheck, collectionsFolder
     }
 
     public init(from decoder: Decoder) throws {
@@ -297,6 +300,7 @@ public struct AppSettings: Hashable, Sendable, Codable {
         lastRunVersion = try container.decodeIfPresent(String.self, forKey: .lastRunVersion)
         checksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checksForUpdates) ?? defaults.checksForUpdates
         lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
+        collectionsFolder = try container.decodeIfPresent(String.self, forKey: .collectionsFolder)
     }
 }
 

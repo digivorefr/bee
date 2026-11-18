@@ -35,12 +35,21 @@ The app is written to `dist/Bee.app` (ad-hoc signed). Tests: `swift test`.
 
 ## Where data lives
 
-`~/Library/Application Support/Bee/`: `workspace.json`, `collections/`, `environments/`, `history.json`, `settings.json`, `secrets.vault`.
+`~/Library/Application Support/Bee/`: `workspace.json`, `collections/`, `environments/`, `history.json`, `settings.json`, `secrets.vault`. The collection files meant to be shared are in `~/Documents/Bee/`.
 
 ## Variables
 
 - `{{name}}` anywhere in a request is replaced by the variable of that name: the active environment first, then the collection, then the globals.
 - A path segment written `:name` (`/tickets/:ticketId`) is a path variable. Its value is set under **Path variables** and may use `{{variables}}`; left empty, it takes the variable of the same name. The value is percent-encoded as one segment (`a/b` is sent as `a%2Fb`), where a `{{placeholder}}` typed in the URL is pasted as it is.
+
+## Collection files
+
+- Each collection has a file in `~/Documents/Bee` (Settings › Collections chooses another folder), written as a Postman Collection v2.1 document and kept up to date as the collection changes. There is no export step: the file can be sent, committed with the code it describes, or opened in Postman.
+- A file dropped in the folder becomes a collection; a file edited elsewhere is read again within two seconds. Bee puts a file in its own form when it first reads it: identifiers are added, so that the same file always names the same requests, and secret values are taken out.
+- What the file holds: the tree, the requests, their scripts, the names of the variables. What it never holds: a secret value (the row is written with an empty value and `"beeSecret": true`) and the value of a variable. Those stay on this Mac: variables in Bee's own store, secrets in the vault.
+- Bee writes only what it changed. A part of a request the file already says, and what Bee does not model (saved responses, an authorization of a kind Bee cannot send, the description of a row), is left as it was written.
+- A file someone changed since Bee last read it is never written over: it is read first. A file that cannot be read is left alone and said once. A file that is deleted is written again: a collection is deleted in Bee, and its file then goes to the Trash.
+- Bee's own copy stays in `~/Library/Application Support/Bee/collections/`; forks are never written to a collection file.
 
 ## Forks
 

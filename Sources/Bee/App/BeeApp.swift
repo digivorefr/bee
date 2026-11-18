@@ -25,6 +25,7 @@ struct BeeApp: App {
                     #endif
                     await model.keepCheckingForUpdates()
                 }
+                .task { await model.keepReadingCollectionFiles() }
         }
         .defaultSize(width: 1280, height: 800)
         .windowToolbarStyle(.unified)

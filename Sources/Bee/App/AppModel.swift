@@ -226,6 +226,8 @@ final class AppModel {
     @ObservationIgnored private let runner: RequestRunner
     @ObservationIgnored private var sessions: [UUID: RequestSession] = [:]
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// The folder where each collection has its file, once the settings said where it is.
+    @ObservationIgnored private var collectionFiles: CollectionFolder?
     @ObservationIgnored private var lastRevealAuthorization: Date?
     @ObservationIgnored private var isRevealGateChangeAuthorized = false
     @ObservationIgnored private var clipboardClearTask: Task<Void, Never>?
@@ -255,11 +257,24 @@ final class AppModel {
         vaultState = loaded.vaultState
         // Forks catch up with what their originals became. Not while secrets are locked: blank values
         // would make a secret the fork changed look untouched.
-        if !isVaultLocked { workspace.forksFollowOriginals() }
         settings = await store.loadSettings()
+        // The collection files: what changed in them since the last time comes in, and a file Bee
+        // does not know yet is a new collection.
+        let files = CollectionFolder(
+            folder: collectionsFolderURL, stateFile: environment.dataDirectory.appendingPathComponent("collection-files.json"),
+            usesTrash: !environment.isEphemeral
+        )
+        collectionFiles = files
+        // Not while secrets are locked: a secret a file brings would be taken out of the file without
+        // reaching the vault. The folder is read once they are unlocked.
+        let reading = isVaultLocked ? nil : await files.read(into: workspace.collections, reserved: identifiersOutsideCollections)
+        if let reading { workspace.collections = reading.applied(to: workspace.collections) }
+        if !isVaultLocked { workspace.forksFollowOriginals() }
         history = await store.loadHistory()
         isLoaded = true
-        if loaded.isFirstLaunch { scheduleSave() }
+        // Every collection gets its file, and what the folder brought in is kept here.
+        if loaded.isFirstLaunch || reading?.changed == true { scheduleSave() } else { await writeCollectionFiles() }
+        if let warning = reading?.warnings.first { notice = Notice(kind: .error, message: warning) }
         // After an update, one line says so and where the changes are listed.
         if let version = WhatsNew.installedVersion, settings.lastRunVersion != version {
             if settings.lastRunVersion != nil {
@@ -318,6 +333,73 @@ final class AppModel {
             try await store.save(workspace, secretsHydrated: !isVaultLocked)
         } catch {
             notice = Notice(kind: .error, message: "Bee could not save your changes: \(error.localizedDescription)")
+        }
+        await writeCollectionFiles()
+    }
+
+    // MARK: Collection files
+
+    /// Where each collection has its file: the folder chosen in the settings, `~/Documents/Bee` otherwise.
+    var collectionsFolderURL: URL {
+        if environment.isEphemeral { return environment.dataDirectory.appendingPathComponent("Shared", isDirectory: true) }
+        if let path = settings.collectionsFolder, !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        return documents.appendingPathComponent("Bee", isDirectory: true)
+    }
+
+    /// The identifiers a collection file cannot give to a request of its own: forks and one-off requests.
+    private var identifiersOutsideCollections: Set<UUID> {
+        Set(workspace.forks.map(\.id)).union(workspace.scratchRequests.map(\.id))
+    }
+
+    private func writeCollectionFiles() async {
+        // Locked, the secrets held here are blank: a file would lose the variables its secret rows refer to.
+        guard let collectionFiles, !isVaultLocked else { return }
+        do {
+            try await collectionFiles.write(workspace.collections)
+        } catch {
+            notice = Notice(
+                kind: .error,
+                message: "Bee could not write the collection files in \(collectionFiles.folder.path): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Looks at the collections folder now and every two seconds: a file someone changed comes in.
+    func keepReadingCollectionFiles() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(2))
+            await readCollectionFiles()
+        }
+    }
+
+    func readCollectionFiles() async {
+        guard isLoaded, let collectionFiles, !isVaultLocked else { return }
+        let reading = await collectionFiles.read(into: workspace.collections, reserved: identifiersOutsideCollections)
+        if let warning = reading.warnings.first { notice = Notice(kind: .error, message: warning) }
+        // The folder was read while the person may have gone on working: what it brought is merged into
+        // the collections as they are now, and what was changed here meanwhile stays.
+        let before = workspace.collections
+        let merged = reading.applied(to: before)
+        guard merged != before else {
+            if reading.needsWriting { await writeCollectionFiles() }
+            return
+        }
+        mutate { workspace in
+            workspace.collections = merged
+        }
+        if !isVaultLocked {
+            mutate { $0.forksFollowOriginals() }
+        }
+        for session in sessions.values { refresh(session) }
+        repairSelection()
+        // Said each time: a file is also how a request could be pointed somewhere else without a word.
+        let names = merged.filter { collection in before.first { $0.id == collection.id } != collection }.map(\.name)
+        if !names.isEmpty {
+            inform("\(names.map { "“\($0)”" }.joined(separator: ", ")) changed in the collections folder. Bee took the changes in.")
         }
     }
 

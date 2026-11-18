@@ -43,7 +43,8 @@ public enum Importer {
         let root = try parse(data)
         switch kind(of: root) {
         case .postmanCollection:
-            return try PostmanReader.collection(from: root)
+            // An import is a copy of its own: importing a file twice never gives two collections one identity.
+            return try PostmanReader.collection(from: root).withFreshIdentifiers()
         case .beeCollection:
             try checkArchiveVersion(root)
             do {
@@ -152,10 +153,12 @@ enum PostmanReader {
         // Without authorization a Postman collection sends none, which Bee spells `.none` at this level.
         let (auth, authNote) = authorization(root["auth"], whenMissing: .none)
         let scripts = scripts(root["event"])
+        let guesses = guessesSecrets(in: root)
         return Collection(
+            id: identifier(info["_postman_id"]) ?? UUID(),
             name: info["name"]?.string ?? "Imported collection",
-            items: items.compactMap(node),
-            variables: variables(root["variable"]),
+            items: items.compactMap { node($0, guesses: guesses) },
+            variables: variables(root["variable"], guesses: guesses),
             auth: auth,
             preRequestScript: scripts.preRequest,
             postResponseScript: scripts.postResponse,
@@ -173,14 +176,27 @@ enum PostmanReader {
         return nil
     }
 
-    private static func node(_ value: JSONValue) -> CollectionNode? {
+    /// A UUID written in the file, when there is one: what lets a file Bee keeps in sync name the same
+    /// collection, folders and requests from one reading to the next.
+    static func identifier(_ value: JSONValue?) -> UUID? {
+        value?.string.flatMap(UUID.init(uuidString:))
+    }
+
+    /// False for a file Bee wrote: its secrets are the rows it marked, and a row it left plain stays plain
+    /// whatever its name. Anywhere else a row named like a credential is taken for one.
+    static func guessesSecrets(in root: JSONValue) -> Bool {
+        root["info"]?[CollectionFile.secretsMarkedKey]?.string != CollectionFile.secretsMarkedValue
+    }
+
+    static func node(_ value: JSONValue, guesses: Bool = true) -> CollectionNode? {
         guard value.object != nil else { return nil }
         if let children = value["item"]?.array {
             let (auth, authNote) = authorization(value["auth"], whenMissing: .inherit)
             let scripts = scripts(value["event"])
             return .folder(Folder(
+                id: identifier(value["id"]) ?? UUID(),
                 name: value["name"]?.string ?? "Folder",
-                items: children.compactMap(node),
+                items: children.compactMap { node($0, guesses: guesses) },
                 auth: auth,
                 preRequestScript: scripts.preRequest,
                 postResponseScript: scripts.postResponse,
@@ -188,20 +204,21 @@ enum PostmanReader {
             ))
         }
         guard let request = value["request"] else { return nil }
-        return .request(requestItem(request, in: value))
+        return .request(requestItem(request, in: value, guesses: guesses))
     }
 
     // MARK: Request
 
-    private static func requestItem(_ request: JSONValue, in item: JSONValue) -> RequestItem {
-        var result = RequestItem(name: item["name"]?.string ?? "Untitled request")
+    private static func requestItem(_ request: JSONValue, in item: JSONValue, guesses: Bool) -> RequestItem {
+        var result = RequestItem(id: identifier(item["id"]) ?? UUID(), name: item["name"]?.string ?? "Untitled request")
+        result.settings = settings(item)
         let scripts = scripts(item["event"])
         result.preRequestScript = scripts.preRequest
         result.postResponseScript = scripts.postResponse
 
         // The short form: the request is just its address.
         guard request.object != nil else {
-            (result.url, result.queryParams) = address(request)
+            (result.url, result.queryParams) = address(request, guesses: guesses)
             result.notes = description(item["description"])
             return result
         }
@@ -213,10 +230,10 @@ enum PostmanReader {
         } else {
             methodNote = "The method \(methodName) is not supported by Bee; GET is used instead."
         }
-        (result.url, result.queryParams) = address(request["url"])
-        result.pathVariables = pathVariables(request["url"], address: result.url)
-        result.headers = headers(request["header"])
-        result.body = body(request["body"], headers: result.headers)
+        (result.url, result.queryParams) = address(request["url"], guesses: guesses)
+        result.pathVariables = pathVariables(request["url"], address: result.url, guesses: guesses)
+        result.headers = headers(request["header"], guesses: guesses)
+        result.body = body(request["body"], headers: result.headers, guesses: guesses)
         let (auth, authNote) = authorization(request["auth"], whenMissing: .inherit)
         result.auth = auth
         let text = description(request["description"])
@@ -224,31 +241,42 @@ enum PostmanReader {
         return result
     }
 
+    /// What the request does differently from the application settings: Postman's protocol profile, and the
+    /// timeout Bee writes beside it.
+    private static func settings(_ item: JSONValue) -> RequestSettings {
+        let behavior = item["protocolProfileBehavior"]
+        var settings = RequestSettings()
+        settings.followRedirects = behavior?["followRedirects"]?.bool
+        settings.verifyTLS = behavior?["strictSSL"]?.bool
+        if case .number(let seconds)? = item["beeTimeout"], seconds > 0 { settings.timeout = seconds }
+        return settings
+    }
+
     /// The address without its query, and the query rows. Postman stores the address as a string
     /// or as an object with `raw` and, usually, a structured `query` list.
-    private static func address(_ value: JSONValue?) -> (url: String, query: [KeyValue]) {
+    private static func address(_ value: JSONValue?, guesses: Bool) -> (url: String, query: [KeyValue]) {
         guard let value else { return ("", []) }
         let raw = value.string ?? value["raw"]?.string ?? composedAddress(value)
         let (base, rawQuery) = splitQuery(raw)
         if let rows = value["query"]?.array {
             return (base, rows.compactMap { row in
                 guard row.object != nil else { return nil }
-                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"])
+                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"], marked: row["beeSecret"], guesses: guesses)
             })
         }
         let rows = rawQuery.split(separator: "&", omittingEmptySubsequences: true).map { pair in
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return keyValue(key: String(parts[0]), value: parts.count > 1 ? String(parts[1]) : "", disabled: nil)
+            return keyValue(key: String(parts[0]), value: parts.count > 1 ? String(parts[1]) : "", disabled: nil, guesses: guesses)
         }
         return (base, rows)
     }
 
     /// The values Postman keeps for the `:name` segments of the address (`url.variable`). A variable left
     /// empty gets no row: Bee then reads the variable of the same name.
-    private static func pathVariables(_ value: JSONValue?, address: String) -> [KeyValue] {
+    private static func pathVariables(_ value: JSONValue?, address: String, guesses: Bool) -> [KeyValue] {
         let rows = (value?["variable"]?.array ?? []).compactMap { entry -> KeyValue? in
             guard let key = entry["key"]?.text ?? entry["id"]?.text, !key.isEmpty else { return nil }
-            return keyValue(key: key, value: entry["value"]?.text ?? "", disabled: nil)
+            return keyValue(key: key, value: entry["value"]?.text ?? "", disabled: nil, marked: entry["beeSecret"], guesses: guesses)
         }
         return PathVariables.storedRows(for: address, from: rows)
     }
@@ -275,11 +303,11 @@ enum PostmanReader {
         return result
     }
 
-    private static func headers(_ value: JSONValue?) -> [KeyValue] {
+    private static func headers(_ value: JSONValue?, guesses: Bool) -> [KeyValue] {
         if let rows = value?.array {
             return rows.compactMap { row in
                 guard row.object != nil else { return nil }
-                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"])
+                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"], marked: row["beeSecret"], guesses: guesses)
             }
         }
         // Old exports write headers as "Name: value" lines.
@@ -288,22 +316,26 @@ enum PostmanReader {
             guard parts.count == 2 else { return nil }
             return keyValue(
                 key: parts[0].trimmingCharacters(in: .whitespaces),
-                value: parts[1].trimmingCharacters(in: .whitespaces), disabled: nil
+                value: parts[1].trimmingCharacters(in: .whitespaces), disabled: nil, guesses: guesses
             )
         }
     }
 
-    /// A row that is secret when its name looks like a credential and it has a value to protect.
-    private static func keyValue(key: String, value: String, disabled: JSONValue?) -> KeyValue {
+    /// A row that is secret when Bee marked it, or, in a file Bee did not write, when its name looks like a
+    /// credential and it has a value to protect.
+    /// - Parameter marked: `beeSecret`, which Bee writes on a secret row since the file never holds its value.
+    private static func keyValue(
+        key: String, value: String, disabled: JSONValue?, marked: JSONValue? = nil, guesses: Bool
+    ) -> KeyValue {
         KeyValue(
             key: key, value: value, isEnabled: disabled?.bool != true,
-            isSecret: !value.isEmpty && CredentialHeuristics.looksSensitive(name: key)
+            isSecret: marked?.bool == true || (guesses && !value.isEmpty && CredentialHeuristics.looksSensitive(name: key))
         )
     }
 
     // MARK: Body
 
-    private static func body(_ value: JSONValue?, headers: [KeyValue]) -> RequestBody {
+    private static func body(_ value: JSONValue?, headers: [KeyValue], guesses: Bool) -> RequestBody {
         var body = RequestBody()
         guard let value, value.object != nil else { return body }
         switch value["mode"]?.string {
@@ -315,11 +347,11 @@ enum PostmanReader {
             body.mode = .urlEncoded
             body.urlEncoded = (value["urlencoded"]?.array ?? []).compactMap { row in
                 guard row.object != nil else { return nil }
-                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"])
+                return keyValue(key: row["key"]?.text ?? "", value: row["value"]?.text ?? "", disabled: row["disabled"], marked: row["beeSecret"], guesses: guesses)
             }
         case "formdata":
             body.mode = .formData
-            body.formData = (value["formdata"]?.array ?? []).compactMap(formField)
+            body.formData = (value["formdata"]?.array ?? []).compactMap { formField($0, guesses: guesses) }
         case "file":
             body.mode = .binary
             body.binaryPath = value["file"]?["src"]?.string ?? ""
@@ -343,7 +375,7 @@ enum PostmanReader {
         return hints.first { contentType.contains($0.0) }?.1 ?? .text
     }
 
-    private static func formField(_ row: JSONValue) -> FormField? {
+    private static func formField(_ row: JSONValue, guesses: Bool) -> FormField? {
         guard row.object != nil else { return nil }
         let key = row["key"]?.text ?? ""
         let isEnabled = row["disabled"]?.bool != true
@@ -356,7 +388,7 @@ enum PostmanReader {
         let value = row["value"]?.text ?? ""
         return FormField(
             key: key, kind: .text, value: value, contentType: contentType, isEnabled: isEnabled,
-            isSecret: !value.isEmpty && CredentialHeuristics.looksSensitive(name: key)
+            isSecret: row["beeSecret"]?.bool == true || (guesses && !value.isEmpty && CredentialHeuristics.looksSensitive(name: key))
         )
     }
 
@@ -436,12 +468,13 @@ enum PostmanReader {
         return (preRequest.joined(separator: "\n"), postResponse.joined(separator: "\n"))
     }
 
-    private static func variables(_ value: JSONValue?) -> [Variable] {
+    private static func variables(_ value: JSONValue?, guesses: Bool) -> [Variable] {
         (value?.array ?? []).compactMap { entry in
             guard let name = entry["key"]?.string ?? entry["id"]?.string else { return nil }
             return Variable(
                 name: name, value: entry["value"]?.text ?? "",
-                isSecret: isSecretVariable(name: name, type: entry["type"]?.string),
+                isSecret: entry["beeSecret"]?.bool == true || entry["type"]?.string == "secret"
+                    || (guesses && isSecretVariable(name: name, type: nil)),
                 isEnabled: entry["disabled"]?.bool != true
             )
         }
@@ -456,8 +489,14 @@ enum PostmanReader {
         value?.string ?? value?["content"]?.string ?? ""
     }
 
+    /// The parts, one paragraph each. A part an earlier one already says is left out: a note Bee added to a
+    /// description, written to a file, is not added again when the file is read.
     private static func notes(_ parts: String?...) -> String {
-        parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        var kept: [String] = []
+        for part in parts.compactMap({ $0 }) where !part.isEmpty && !kept.contains(where: { $0.contains(part) }) {
+            kept.append(part)
+        }
+        return kept.joined(separator: "\n\n")
     }
 
     // MARK: Environment
