@@ -103,28 +103,56 @@ final class ShellState {
     var pendingDelete: PendingDelete?
     /// The fork whose merge is being reviewed.
     var mergingFork: UUID?
-    /// The collection or environment being dragged, and where it would land.
+    /// The collection, environment, request or folder being dragged, and where it would land.
     var picked: Picked?
-    var landing: Landing?
+    private(set) var landing: Landing?
 
-    /// A collection or an environment taken by the pointer.
+    /// A row taken by the pointer: a collection, an environment, or a request or folder (a node).
     struct Picked: Equatable {
-        enum List { case collections, environments }
+        enum List { case collections, environments, nodes }
 
         let token = UUID()
         let list: List
         let id: UUID
     }
 
-    /// Where the picked one would land: a line drawn above or below a row. Nothing in the list moves
-    /// while the drag goes on (the list follows the pointer by its rows, which must stay where they are);
-    /// the rows move once it is dropped.
+    /// Where the picked one would land: a line drawn above or below a row, or a row drawn round when it
+    /// would go into it. Nothing in the list moves while the drag goes on (the list follows the pointer by
+    /// its rows, which must stay where they are); the rows move once it is dropped.
     struct Landing: Equatable {
-        /// The row it would take the place of.
+        enum Mark: Equatable { case above, below, into }
+        /// Where a request or a folder goes: beside a node, or into a folder (or a collection, with none).
+        enum Place: Equatable {
+            case beside(UUID, after: Bool)
+            case into(collection: UUID, folder: UUID?)
+        }
+
+        /// The row under the pointer: leaving it takes the mark away.
         let target: UUID
-        /// The row the line is drawn on, and on which edge.
+        /// The row the mark is drawn on, and how.
         let row: UUID
-        let isBelow: Bool
+        let mark: Mark
+        /// For a request or a folder, where it goes.
+        var place: Place?
+    }
+
+    /// What a row under the pointer is, for a request or a folder dragged over it.
+    enum NodeTarget {
+        case request
+        case folder(collection: UUID)
+        /// A fork: what is dropped on it goes after its original, under which it stands.
+        case fork(original: UUID)
+        case collection
+    }
+
+    /// Changes the mark only when it changes: a pointer moving over a row says so many times a second.
+    private func mark(_ new: Landing?) {
+        if landing != new { landing = new }
+    }
+
+    /// The mark of a row, if the drag in flight draws one on it.
+    func mark(of row: UUID) -> Landing.Mark? {
+        landing?.row == row ? landing?.mark : nil
     }
 
     /// What a row hands to a drag as it begins: its payload, the row noted as picked up on the way.
@@ -138,7 +166,7 @@ final class ShellState {
     func pickUp(_ list: Picked.List, _ id: UUID, watchingMouse: Bool = true) {
         let started = Picked(list: list, id: id)
         picked = started
-        landing = nil
+        mark(nil)
         guard watchingMouse else { return }
         Task { @MainActor in
             while picked?.token == started.token, NSEvent.pressedMouseButtons & 1 != 0 {
@@ -155,38 +183,75 @@ final class ShellState {
     /// of the target: below it coming from above, above it coming from below.
     func hover(_ list: Picked.List, over target: UUID, isOver: Bool, order: [UUID], lastRow: (UUID) -> UUID = { $0 }) {
         guard isOver else {
-            if landing?.target == target { landing = nil }
+            if landing?.target == target { mark(nil) }
             return
         }
         guard let picked, picked.list == list, picked.id != target,
               let from = order.firstIndex(of: picked.id), let to = order.firstIndex(of: target) else {
-            landing = nil
+            mark(nil)
             return
         }
-        landing = from < to ? Landing(target: target, row: lastRow(target), isBelow: true) : Landing(target: target, row: target, isBelow: false)
+        mark(from < to ? Landing(target: target, row: lastRow(target), mark: .below) : Landing(target: target, row: target, mark: .above))
     }
 
-    /// Dropped on `target`: the picked one takes its place, the others moving aside. False when nothing of
+    /// A request or a folder over `row`, the pointer at `fraction` of its height from the top (`nil` when
+    /// it leaves). Over a request: before it in its upper half, after it in its lower half. Over a folder:
+    /// before it at its top, into it below. Over a collection: into it, at the end.
+    func hoverNode(over row: UUID, at fraction: CGFloat?, as kind: NodeTarget, in model: AppModel) {
+        guard let fraction else {
+            if landing?.target == row { mark(nil) }
+            return
+        }
+        guard let picked, picked.list == .nodes, picked.id != row else {
+            mark(nil)
+            return
+        }
+        func beside(_ target: UUID, after: Bool) -> Landing? {
+            guard model.canMoveNode(picked.id, beside: target, after: after) else { return nil }
+            // After a request, past the forks that stand under it.
+            let below = model.workspace.forks(of: target).last?.id ?? target
+            return Landing(target: row, row: after ? below : target, mark: after ? .below : .above, place: .beside(target, after: after))
+        }
+        func into(_ collection: UUID, folder: UUID?) -> Landing? {
+            if let folder, model.workspace.collection(containing: folder)?.isFolder(folder, within: picked.id) == true { return nil }
+            return Landing(target: row, row: folder ?? collection, mark: .into, place: .into(collection: collection, folder: folder))
+        }
+        switch kind {
+        case .request: mark(beside(row, after: fraction >= 0.5))
+        case .folder(let collection): mark(fraction < 0.3 ? beside(row, after: false) : into(collection, folder: row))
+        case .fork(let original): mark(beside(original, after: true))
+        case .collection: mark(into(row, folder: nil))
+        }
+    }
+
+    /// A request or a folder dropped: it goes where the mark said. False when none was picked up.
+    func dropNode(in model: AppModel) -> Bool {
+        let place = landing?.place
+        return drop(.nodes) { id in
+            switch place {
+            case .beside(let target, let after): model.moveNode(id, beside: target, after: after)
+            case .into(let collection, let folder): model.moveNode(id, toCollection: collection, folder: folder)
+            case nil: break
+            }
+        }
+    }
+
+    /// Dropped: `move` puts the picked one where it goes, the others moving aside. False when nothing of
     /// this list was picked up.
-    func drop(_ list: Picked.List, on target: UUID, in model: AppModel) -> Bool {
+    func drop(_ list: Picked.List, move: @escaping (UUID) -> Void) -> Bool {
         guard let done = picked, done.list == list else { return false }
         putDown()
         // Once the drag is over, not while the list still ends it: its rows then move with an animation.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
-            withAnimation(.snappy(duration: 0.25)) {
-                switch list {
-                case .collections: model.moveCollection(done.id, toPlaceOf: target)
-                case .environments: model.moveEnvironment(done.id, toPlaceOf: target)
-                }
-            }
+            withAnimation(.snappy(duration: 0.25)) { move(done.id) }
         }
         return true
     }
 
     func putDown() {
         picked = nil
-        landing = nil
+        mark(nil)
     }
 
     func isCollectionExpanded(_ id: UUID) -> Bool { !toggled.contains(id) }

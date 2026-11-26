@@ -2,12 +2,14 @@
 
 What changed in each version of Bee, newest first. The first version listed is the version the application is built as, and Bee shows this file under Help › What's New in Bee.
 
-## 1.3.0 — 2026-11-25
+## 1.3.0 — 2026-11-26
 
 ### Added
 
 - Collections and environments can be sorted by name, A to Z or Z to A, from the menu beside the + of their heading, which then reads A–Z or Z–A. A collection or an environment added or renamed takes its place by name.
 - Drag a collection or an environment onto another to move it there: a line of honey shows where it would land, and the others move aside once it is dropped. Move Up and Move Down in its menu do the same. A list sorted by name then keeps the order you give it from what you see; the order you arrange is kept when you sort by name and comes back with Manual.
+- Requests and folders are ordered in their collection the same way: dragged, one lands before or after the row under the pointer (by its upper or lower half), or into a folder dropped in its middle; Move Up and Move Down in its menu move it among what holds it. Collection files keep that order.
+- What a collection holds can be sorted by name too, folders first, from the menu that comes up on its row under the pointer (or Sort Requests in its menu); the row then reads A–Z or Z–A. Sorting changes what Bee shows, not the collection file; moving one of its requests by hand gives the collection the order shown.
 
 ## 1.2.0 — 2026-11-18
 

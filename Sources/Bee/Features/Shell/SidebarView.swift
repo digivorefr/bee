@@ -1,6 +1,7 @@
 import AppKit
 import BeeCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// New request, Drafts, Collections, Environments, History.
 struct SidebarView: View {
@@ -112,7 +113,7 @@ struct SidebarView: View {
     static func treeRows(model: AppModel, shell: ShellState = .shared) -> [TreeRow] {
         var rows: [TreeRow] = []
         func walk(_ nodes: [CollectionNode], collectionID: UUID, depth: Int) {
-            for node in nodes {
+            for node in model.requestOrder(of: collectionID).arranged(nodes) {
                 switch node {
                 case .folder(let folder):
                     rows.append(TreeRow(content: .folder(folder), collectionID: collectionID, depth: depth))
@@ -151,10 +152,31 @@ struct SidebarView: View {
 
     // MARK: Landing
 
-    /// The edge of a row where the line of a drag in flight is drawn.
-    private func landingEdge(of rowID: UUID) -> VerticalEdge? {
-        guard let landing = shell.landing, landing.row == rowID else { return nil }
-        return landing.isBelow ? .bottom : .top
+    /// What a request or a folder dragged over a row of a collection does there.
+    private func nodeDrop(over row: UUID, as kind: ShellState.NodeTarget, collection: UUID, folder: UUID? = nil) -> RowDrop {
+        let shell = shell, model = model
+        return RowDrop(
+            hover: { fraction in
+                // A collection dragged over what another one holds is over that collection.
+                if shell.picked?.list == .collections {
+                    shell.hover(
+                        .collections, over: collection, isOver: fraction != nil, order: model.shownCollections.map(\.id),
+                        lastRow: { Self.lastRow(of: $0, model: model) }
+                    )
+                } else {
+                    shell.hoverNode(over: row, at: fraction, as: kind, in: model)
+                }
+            },
+            perform: { texts in
+                if shell.drop(.collections, move: { model.moveCollection($0, toPlaceOf: collection) }) { return true }
+                if shell.dropNode(in: model) { return true }
+                // Not dragged from the sidebar: a file, dropped into a folder.
+                guard let folder else { return false }
+                Task { @MainActor in drop(await texts(), onCollection: collection, folder: folder) }
+                return true
+            },
+            takesFiles: folder != nil
+        )
     }
 
     /// The last row a collection fills on screen: itself when closed, what it holds last when open.
@@ -166,20 +188,23 @@ struct SidebarView: View {
 
     private func requestRow(_ request: RequestItem, depth: Int, isInCollection: Bool) -> some View {
         let selection = SidebarSelection.request(request.id)
+        let collection = isInCollection ? model.workspace.collection(containing: request.id)?.id : nil
         return SidebarRow(
             selection: selection, name: request.name, depth: depth, kind: .request(request.method),
-            landingEdge: landingEdge(of: request.id),
+            landing: shell.mark(of: request.id),
             hasForks: isInCollection && !model.workspace.forks(of: request.id).isEmpty,
-            rename: { model.renameRequest(request.id, to: $0) }
+            rename: { model.renameRequest(request.id, to: $0) },
+            drop: collection.map { nodeDrop(over: request.id, as: .request, collection: $0) }
         )
         .tag(selection)
-        .draggable(SidebarDrag.payload(for: request.id))
+        .draggable(shell.picking(.nodes, request.id, as: SidebarDrag.payload(for: request.id)))
         .contextMenu {
             if isInCollection {
                 Button("Fork") { model.forkRequest(request.id) }
             }
             Button("Duplicate") { model.duplicateRequest(request.id) }
             Button("Rename") { beginRename(selection, name: request.name) }
+            if isInCollection { moveItems(request.id) }
             Divider()
             Button("Delete", role: .destructive) {
                 ShellActions.deleteRequest(request.id, name: request.name, model: model)
@@ -191,8 +216,11 @@ struct SidebarView: View {
         let selection = SidebarSelection.request(fork.id)
         return SidebarRow(
             selection: selection, name: fork.name, depth: depth, kind: .fork,
-            landingEdge: landingEdge(of: fork.id),
-            rename: { model.renameFork(fork.id, to: $0) }
+            landing: shell.mark(of: fork.id),
+            rename: { model.renameFork(fork.id, to: $0) },
+            drop: model.workspace.collection(containing: fork.originID).map {
+                nodeDrop(over: fork.id, as: .fork(original: fork.originID), collection: $0.id)
+            }
         )
         .tag(selection)
         .contextMenu {
@@ -211,29 +239,22 @@ struct SidebarView: View {
             kind: .container(glyph: "folder", isExpanded: shell.isFolderExpanded(folder.id)) {
                 shell.toggle(folder.id)
             },
-            landingEdge: landingEdge(of: folder.id),
+            landing: shell.mark(of: folder.id),
             rename: { name in
                 guard var current = model.folder(id: folder.id) else { return }
                 current.name = name
                 model.updateFolder(current)
-            }
+            },
+            drop: nodeDrop(over: folder.id, as: .folder(collection: collectionID), collection: collectionID, folder: folder.id)
         )
         .tag(selection)
-        .draggable(SidebarDrag.payload(for: folder.id))
-        .dropDestination(for: String.self) { items, _ in
-            drop(items, onCollection: collectionID, folder: folder.id)
-        } isTargeted: { isOver in
-            // A collection dropped on one of its folders takes the place of the collection: the line says so.
-            shell.hover(
-                .collections, over: collectionID, isOver: isOver, order: model.shownCollections.map(\.id),
-                lastRow: { Self.lastRow(of: $0, model: model) }
-            )
-        }
+        .draggable(shell.picking(.nodes, folder.id, as: SidebarDrag.payload(for: folder.id)))
         .contextMenu {
             Button("New request") { ShellActions.newRequest(model, inCollection: collectionID, folder: folder.id) }
             Button("New folder") { ShellActions.newFolder(model, inCollection: collectionID, parent: folder.id) }
             Divider()
             Button("Rename") { beginRename(selection, name: folder.name) }
+            moveItems(folder.id)
             Divider()
             Button("Delete", role: .destructive) { ShellActions.deleteFolder(folder, model: model) }
         }
@@ -247,12 +268,13 @@ struct SidebarView: View {
                 shell.toggle(collection.id)
             },
             isLifted: shell.landing != nil && shell.picked?.id == collection.id,
-            landingEdge: landingEdge(of: collection.id),
+            landing: shell.mark(of: collection.id),
             rename: { name in
                 guard var current = model.collection(id: collection.id) else { return }
                 current.name = name
                 model.updateCollection(current)
-            }
+            },
+            requestOrder: requestOrder(of: collection.id)
         )
         .tag(selection)
         // `draggable`, not `onDrag`: SwiftUI calls an `onDrag` for the first drag of a row only. What it
@@ -261,10 +283,14 @@ struct SidebarView: View {
         .dropDestination(for: String.self) { items, _ in
             drop(items, onCollection: collection.id, folder: nil)
         } isTargeted: { isOver in
-            shell.hover(
-                .collections, over: collection.id, isOver: isOver, order: model.shownCollections.map(\.id),
-                lastRow: { Self.lastRow(of: $0, model: model) }
-            )
+            if shell.picked?.list == .nodes {
+                shell.hoverNode(over: collection.id, at: isOver ? 0.5 : nil, as: .collection, in: model)
+            } else {
+                shell.hover(
+                    .collections, over: collection.id, isOver: isOver, order: model.shownCollections.map(\.id),
+                    lastRow: { Self.lastRow(of: $0, model: model) }
+                )
+            }
         }
         .contextMenu {
             Button("New request") { ShellActions.newRequest(model, inCollection: collection.id, folder: nil) }
@@ -272,12 +298,12 @@ struct SidebarView: View {
             Divider()
             Button("Rename") { beginRename(selection, name: collection.name) }
             Button("Export…") { ShellActions.exportCollection(collection.id, model: model) }
+            Menu("Sort Requests") { OrderPicker(order: requestOrder(of: collection.id)) }
             Divider()
             let shown = model.shownCollections.map(\.id)
-            Button("Move Up") { model.moveCollection(collection.id, by: -1) }
-                .disabled(shown.first == collection.id)
-            Button("Move Down") { model.moveCollection(collection.id, by: 1) }
-                .disabled(shown.last == collection.id)
+            moveButtons(isFirst: shown.first == collection.id, isLast: shown.last == collection.id) {
+                model.moveCollection(collection.id, by: $0)
+            }
             Divider()
             Button("Delete", role: .destructive) { ShellActions.deleteCollection(collection, model: model) }
         }
@@ -289,7 +315,7 @@ struct SidebarView: View {
         return SidebarRow(
             selection: selection, name: environment.name, depth: 0, kind: .leaf(glyph: "globe"),
             isActive: isActive, isLifted: shell.landing != nil && shell.picked?.id == environment.id,
-            landingEdge: landingEdge(of: environment.id),
+            landing: shell.mark(of: environment.id),
             rename: { name in
                 guard var current = model.environment(id: environment.id) else { return }
                 current.name = name
@@ -312,15 +338,37 @@ struct SidebarView: View {
             Button("Export…") { ShellActions.exportEnvironment(environment.id, model: model) }
             Divider()
             let shown = model.shownEnvironments.map(\.id)
-            Button("Move Up") { model.moveEnvironment(environment.id, by: -1) }
-                .disabled(shown.first == environment.id)
-            Button("Move Down") { model.moveEnvironment(environment.id, by: 1) }
-                .disabled(shown.last == environment.id)
+            moveButtons(isFirst: shown.first == environment.id, isLast: shown.last == environment.id) {
+                model.moveEnvironment(environment.id, by: $0)
+            }
             Divider()
             Button("Delete", role: .destructive) {
                 shell.pendingDelete = .environment(id: environment.id, name: environment.name)
             }
         }
+    }
+
+    private func requestOrder(of collectionID: UUID) -> Binding<ListOrder> {
+        Binding(get: { model.requestOrder(of: collectionID) }, set: { model.setRequestOrder($0, of: collectionID) })
+    }
+
+    /// Move Up and Move Down, among what holds a request or a folder.
+    @ViewBuilder
+    private func moveItems(_ nodeID: UUID) -> some View {
+        let position = model.position(of: nodeID)
+        Divider()
+        moveButtons(isFirst: position.map { $0.index == 0 } ?? true, isLast: position.map { $0.index == $0.count - 1 } ?? true) {
+            model.moveNode(nodeID, by: $0)
+        }
+    }
+
+    /// Move Up and Move Down: `move` takes the row one place up (`-1`) or down (`1`) its list as shown.
+    @ViewBuilder
+    private func moveButtons(isFirst: Bool, isLast: Bool, move: @escaping (Int) -> Void) -> some View {
+        Button("Move Up") { move(-1) }
+            .disabled(isFirst)
+        Button("Move Down") { move(1) }
+            .disabled(isLast)
     }
 
     // MARK: Rename
@@ -384,7 +432,8 @@ struct SidebarView: View {
     private func dropEnvironment(_ items: [String], on target: UUID) -> Bool {
         if let dragged = items.lazy.compactMap(SidebarDrag.environmentID(from:)).first {
             // Without a pick-up seen (none was seen to start), it takes the target's place all the same.
-            if !shell.drop(.environments, on: target, in: model) { model.moveEnvironment(dragged, toPlaceOf: target) }
+            let move = { (id: UUID) in model.moveEnvironment(id, toPlaceOf: target) }
+            if !shell.drop(.environments, move: move) { move(dragged) }
             return true
         }
         let files = items.compactMap(SidebarDrag.fileURL(from:))
@@ -398,11 +447,13 @@ struct SidebarView: View {
         var handled = false
         for item in items {
             if let dragged = SidebarDrag.collectionID(from: item) {
-                if !shell.drop(.collections, on: collectionID, in: model) { model.moveCollection(dragged, toPlaceOf: collectionID) }
+                let move = { (id: UUID) in model.moveCollection(id, toPlaceOf: collectionID) }
+                if !shell.drop(.collections, move: move) { move(dragged) }
                 return true
             }
             if let nodeID = SidebarDrag.nodeID(from: item) {
-                model.moveNode(nodeID, toCollection: collectionID, folder: folderID)
+                // Where the mark said, once the drag is over; without one seen, into the target all the same.
+                if !shell.dropNode(in: model) { model.moveNode(nodeID, toCollection: collectionID, folder: folderID) }
                 handled = true
             } else if let url = SidebarDrag.fileURL(from: item) {
                 handled = ShellActions.importFiles([url], model: model) || handled
@@ -413,6 +464,72 @@ struct SidebarView: View {
             if let folderID { shell.expandFolder(folderID) }
         }
         return handled
+    }
+}
+
+// MARK: - Row drop
+
+/// What a row does with a drag over it.
+struct RowDrop {
+    /// The pointer over the row at this fraction of its height from the top; `nil` once it leaves.
+    let hover: (CGFloat?) -> Void
+    /// Dropped. `texts` reads what was dragged in, for a drag from elsewhere (a file).
+    let perform: (_ texts: @escaping () async -> [String]) -> Bool
+    /// True when a file dropped on the row is taken (a folder imports it).
+    var takesFiles = false
+}
+
+private struct RowDropModifier: ViewModifier {
+    let drop: RowDrop?
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        if let drop {
+            content.onDrop(of: drop.takesFiles ? [.utf8PlainText, .fileURL] : [.utf8PlainText], delegate: RowDropDelegate(drop: drop, height: height))
+        } else {
+            content
+        }
+    }
+}
+
+/// Follows the pointer over a row: unlike a plain drop destination, it says where on the row it is.
+private struct RowDropDelegate: DropDelegate {
+    let drop: RowDrop
+    let height: CGFloat
+
+    func dropEntered(info: DropInfo) { drop.hover(fraction(of: info)) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        drop.hover(fraction(of: info))
+        return DropProposal(operation: ShellState.shared.picked == nil ? .copy : .move)
+    }
+
+    func dropExited(info: DropInfo) { drop.hover(nil) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.fileURL, .utf8PlainText])
+        return drop.perform { await Self.texts(of: providers) }
+    }
+
+    private func fraction(of info: DropInfo) -> CGFloat {
+        height > 0 ? min(max(info.location.y / height, 0), 1) : 0.5
+    }
+
+    /// What was dragged in, as text: a file as its URL, anything else as its text.
+    private static func texts(of providers: [NSItemProvider]) async -> [String] {
+        var texts: [String] = []
+        for provider in providers {
+            let isFile = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+            let text: String? = await withCheckedContinuation { continuation in
+                if isFile {
+                    _ = provider.loadObject(ofClass: NSURL.self) { url, _ in continuation.resume(returning: (url as? NSURL)?.absoluteString) }
+                } else {
+                    _ = provider.loadObject(ofClass: NSString.self) { text, _ in continuation.resume(returning: text as? String) }
+                }
+            }
+            if let text { texts.append(text) }
+        }
+        return texts
     }
 }
 
@@ -489,33 +606,7 @@ private struct SidebarSectionHeader: View {
             Text(title)
             Spacer(minLength: Theme.Space.s)
             // How the list is ordered, said in the heading when it is by name.
-            Menu {
-                Picker("Order", selection: $order) {
-                    Text("Manual").tag(ListOrder.manual)
-                    Text("Name, A to Z").tag(ListOrder.nameAscending)
-                    Text("Name, Z to A").tag(ListOrder.nameDescending)
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
-                Group {
-                    switch order {
-                    case .manual: Image(systemName: "arrow.up.arrow.down")
-                    case .nameAscending: Text("A–Z")
-                    case .nameDescending: Text("Z–A")
-                    }
-                }
-                // As quiet as the add button beside it, which it looks and answers like.
-                .font(Theme.text(Theme.Size.caption, weight: .medium))
-                .frame(minWidth: Theme.Space.xl, minHeight: Theme.Space.l)
-            }
-            .menuStyle(.button)
-            .buttonStyle(QuietButtonStyle())
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Order of the \(title.lowercased()): \(Self.describe(order))")
-            .accessibilityLabel("Order of the \(title.lowercased())")
-            .accessibilityValue(Self.describe(order))
+            OrderMenu(order: $order, subject: title.lowercased(), holdsFolders: false)
             Button(action: add) {
                 Image(systemName: "plus")
                     .font(Theme.text(Theme.Size.caption, weight: .medium))
@@ -526,12 +617,61 @@ private struct SidebarSectionHeader: View {
             .accessibilityLabel(addLabel)
         }
     }
+}
 
-    private static func describe(_ order: ListOrder) -> String {
-        switch order {
+/// The orders a list can take, as the items of a menu.
+private struct OrderPicker: View {
+    @Binding var order: ListOrder
+
+    var body: some View {
+        Picker("Order", selection: $order) {
+            Text("Manual").tag(ListOrder.manual)
+            Text("Name, A to Z").tag(ListOrder.nameAscending)
+            Text("Name, Z to A").tag(ListOrder.nameDescending)
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+    }
+}
+
+/// How a list is ordered: a quiet menu that reads A–Z or Z–A when it is by name.
+private struct OrderMenu: View {
+    @Binding var order: ListOrder
+    /// What is ordered, for help and accessibility: "collections", "requests of Bee Basics".
+    let subject: String
+    /// True for what a collection holds, whose folders come first when sorted by name.
+    let holdsFolders: Bool
+
+    var body: some View {
+        Menu {
+            OrderPicker(order: $order)
+        } label: {
+            Group {
+                switch order {
+                case .manual: Image(systemName: "arrow.up.arrow.down")
+                case .nameAscending: Text("A–Z")
+                case .nameDescending: Text("Z–A")
+                }
+            }
+            // As quiet as the add button beside it, which it looks and answers like.
+            .font(Theme.text(Theme.Size.caption, weight: .medium))
+            .frame(minWidth: Theme.Space.xl, minHeight: Theme.Space.l)
+        }
+        .menuStyle(.button)
+        .buttonStyle(QuietButtonStyle())
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Order of the \(subject): \(described)")
+        .accessibilityLabel("Order of the \(subject)")
+        .accessibilityValue(described)
+    }
+
+    private var described: String {
+        let folders = holdsFolders ? ", folders first" : ""
+        return switch order {
         case .manual: "manual, drag to move"
-        case .nameAscending: "by name, A to Z"
-        case .nameDescending: "by name, Z to A"
+        case .nameAscending: "by name, A to Z" + folders
+        case .nameDescending: "by name, Z to A" + folders
         }
     }
 }
@@ -560,12 +700,19 @@ private struct SidebarRow: View {
     var isActive = false
     /// True for the collection or environment being dragged over the list: it waits, faded, to move.
     var isLifted = false
-    /// The edge where the dragged one would land, drawn as a line of honey.
-    var landingEdge: VerticalEdge?
+    /// Where a drag in flight would land on this row: a line of honey above or below it, or round it.
+    var landing: ShellState.Landing.Mark?
     /// True for a request that has forks: the full cell says which one is the original.
     var hasForks = false
     /// `nil` when the row has a fixed name.
     var rename: ((String) -> Void)?
+    /// What the row does with a drag over it, told where the pointer is on it.
+    var drop: RowDrop?
+    /// For a collection: how what it holds is ordered, offered under the pointer and said when by name.
+    var requestOrder: Binding<ListOrder>?
+
+    @ViewState private var height: CGFloat = 0
+    @ViewState private var isHovered = false
 
     private var shell: ShellState { .shared }
     private var isRenaming: Bool { rename != nil && shell.renaming == selection }
@@ -585,6 +732,9 @@ private struct SidebarRow: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: Theme.Space.s)
+            if let requestOrder, requestOrder.wrappedValue != .manual || isHovered {
+                OrderMenu(order: requestOrder, subject: "requests of \(name)", holdsFolders: true)
+            }
             if isActive { activeMark }
             if hasForks {
                 CellMark(color: Theme.inkSecondary, size: Theme.Size.caption - 2)
@@ -595,21 +745,35 @@ private struct SidebarRow: View {
         }
         .contentShape(Rectangle())
         .opacity(isLifted ? 0.45 : 1)
-        // Where the dragged one would land: a line of honey between this row and the next, drawn over
-        // the rows so that none of them moves under the pointer.
-        .overlay(alignment: landingEdge == .bottom ? .bottom : .top) {
-            if let landingEdge {
+        // Where the dragged one would land: a line of honey between this row and the next, or round this
+        // row when it would go into it, drawn over the rows so that none of them moves under the pointer.
+        .overlay(alignment: landing == .below ? .bottom : .top) {
+            if let landing, landing != .into {
                 // On the very edge of the row (a row draws nothing past it), a cell of honey resting on it.
-                HStack(alignment: landingEdge == .bottom ? .bottom : .top, spacing: 0) {
+                HStack(alignment: landing == .below ? .bottom : .top, spacing: 0) {
                     CellMark(color: Theme.honey, size: Theme.Size.caption - 4)
                     Capsule().fill(Theme.honey).frame(height: 2)
                 }
-                .offset(y: landingEdge == .bottom ? ShellMetrics.rowGap - 0.5 : 0.5 - ShellMetrics.rowGap)
+                .offset(y: landing == .below ? ShellMetrics.rowGap - 0.5 : 0.5 - ShellMetrics.rowGap)
                 .padding(.leading, CGFloat(depth) * ShellMetrics.indent - Theme.Space.xs)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
         }
+        .overlay {
+            if landing == .into {
+                RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                    .strokeBorder(Theme.honey, lineWidth: 2)
+                    .padding(.horizontal, -Theme.Space.s)
+                    .padding(.vertical, 1.5 - ShellMetrics.rowGap)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        // Only a collection offers something under the pointer: its order.
+        .onHover { isOver in if requestOrder != nil { isHovered = isOver } }
+        .modifier(RowDropModifier(drop: drop, height: height))
     }
 
     @ViewBuilder

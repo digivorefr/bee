@@ -167,6 +167,54 @@ public extension Collection {
         return nil
     }
 
+    /// Where a request or a folder stands: the folder that holds it (`nil` for the collection itself) and
+    /// its index among what that holds. `nil` when the collection has no such node.
+    func place(of id: UUID) -> (folderID: UUID?, index: Int)? {
+        func search(_ nodes: [CollectionNode], in folderID: UUID?) -> (folderID: UUID?, index: Int)? {
+            for (index, node) in nodes.enumerated() {
+                if node.id == id { return (folderID, index) }
+                if case .folder(let folder) = node, let found = search(folder.items, in: folder.id) { return found }
+            }
+            return nil
+        }
+        return search(items, in: nil)
+    }
+
+    /// What holds a request or a folder, itself included: what the collection or its folder holds. `nil`
+    /// when the collection has no such node.
+    func siblings(of id: UUID) -> [CollectionNode]? {
+        guard let place = place(of: id) else { return nil }
+        guard let folderID = place.folderID else { return items }
+        return folder(id: folderID)?.items
+    }
+
+    /// True when the folder `folderID` is the node `id` or stands inside it: a folder does not go there.
+    func isFolder(_ folderID: UUID, within id: UUID) -> Bool {
+        folderID == id || ancestry(of: folderID)?.contains { $0.id == id } == true
+    }
+
+    /// The collection as `order` shows it, at every level.
+    func arranged(_ order: ListOrder) -> Collection {
+        var arranged = self
+        arranged.items = order.arrangedDeeply(items)
+        return arranged
+    }
+
+    /// Where a node goes to stand right before or right after `target`, said as `insert(_:inFolder:at:)`
+    /// reads it once the node has left its own place. `nil` when the collection has no such target, when
+    /// the node would not move, or when it would go inside itself.
+    func destination(of id: UUID, beside target: UUID, after: Bool) -> (folderID: UUID?, index: Int)? {
+        guard id != target, let goal = place(of: target) else { return nil }
+        if let folderID = goal.folderID, isFolder(folderID, within: id) { return nil }
+        var index = goal.index + (after ? 1 : 0)
+        if let from = place(of: id), from.folderID == goal.folderID {
+            // Leaving its place first moves up what stood after it.
+            if from.index < index { index -= 1 }
+            if from.index == index { return nil }
+        }
+        return (goal.folderID, index)
+    }
+
     /// The folders that contain the node, outermost first. `nil` when the node is not in the collection.
     func ancestry(of id: UUID) -> [Folder]? {
         func search(_ nodes: [CollectionNode], path: [Folder]) -> [Folder]? {

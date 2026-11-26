@@ -30,7 +30,10 @@ import SwiftUI
 ///     order:collections|environments,manual|az|za   sidebarorder (logs both lists as shown)
 ///     dropcollection:<name>><target name>   dropenvironment:<name>><target name> (as a drop does)
 ///     movecollection:<name>,up|down   moveenvironment:<name>,up|down (as the menu does)
-///     dragbegin|draghover|dragdrop:collections|environments,<name>|end   dragcancel
+///     dragbegin|draghover|dragdrop:collections|environments|nodes,<name>|end   dragcancel
+///     nodehover:<row name>,<fraction of its height> (a request or folder dragged over that row)
+///     movenode:<name>,up|down (as the menu does)   tree:<collection name> (logs what it holds, in order)
+///     requestorder:<collection name>,manual|az|za   shown:<collection name> (logs its rows as shown)
 ///     (a drag in flight, as the sidebar's rows see it)
 ///
 /// `BEE_UPDATE_FEED=<url>` and `BEE_UPDATE_PUBLIC_KEY=<base64>` point the updater at a local feed.
@@ -326,24 +329,91 @@ enum DebugHarness {
             // As the sidebar's rows call the shell state during a drag.
             let parts = argument.split(separator: ",", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return log("\(command): bad arguments") }
+            let shell = ShellState.shared
+            if parts[0] == "nodes" {
+                let nodes = model.workspace.collections.flatMap { collection in
+                    collection.allRequests.map { ($0.id, $0.name) } + folders(in: collection.items).map { ($0.id, $0.name) }
+                }
+                switch command {
+                case "dragbegin":
+                    guard let id = nodes.first(where: { $0.1 == parts[1] })?.0 else { return log("dragbegin: nothing named \(parts[1])") }
+                    shell.pickUp(.nodes, id, watchingMouse: false)
+                case "dragdrop":
+                    log("drop: \(shell.dropNode(in: model))")
+                    try? await Task.sleep(for: .milliseconds(400))
+                default:
+                    log("draghover: nodes take nodehover")
+                }
+                return
+            }
             let list: ShellState.Picked.List = parts[0] == "collections" ? .collections : .environments
             let shown = list == .collections ? model.shownCollections.map { ($0.id, $0.name) } : model.shownEnvironments.map { ($0.id, $0.name) }
             guard let id = parts[1] == "end" ? shown.last?.0 : shown.first(where: { $0.1 == parts[1] })?.0 else {
                 return log("\(command): nothing named \(parts[1])")
             }
-            let shell = ShellState.shared
             switch command {
             case "dragbegin":
                 shell.pickUp(list, id, watchingMouse: false)
             case "draghover":
                 shell.hover(list, over: id, isOver: true, order: shown.map(\.0)) { SidebarView.lastRow(of: $0, model: model) }
-                let names = model.workspace.collections.flatMap(\.allRequests).map { ($0.id, $0.name) }
-                    + model.workspace.collections.map { ($0.id, $0.name) } + model.workspace.environments.map { ($0.id, $0.name) }
-                log("landing: \(shell.landing.map { landing in "\(landing.isBelow ? "below" : "above") \(names.first { $0.0 == landing.row }?.1 ?? "?")" } ?? "none")")
+                log("landing: \(landingText(model))")
             default:
-                log("drop: \(shell.drop(list, on: id, in: model))")
+                log("drop: \(shell.drop(list) { list == .collections ? model.moveCollection($0, toPlaceOf: id) : model.moveEnvironment($0, toPlaceOf: id) })")
                 try? await Task.sleep(for: .milliseconds(400))
             }
+        case "movenode":
+            let parts = argument.split(separator: ",").map(String.init)
+            let nodes = model.workspace.collections.flatMap { $0.allRequests.map { ($0.id, $0.name) } + folders(in: $0.items).map { ($0.id, $0.name) } }
+            guard parts.count == 2, let id = nodes.first(where: { $0.1 == parts[0] })?.0 else { return log("movenode: bad arguments") }
+            model.moveNode(id, by: parts[1] == "up" ? -1 : 1)
+        case "requestorder":
+            let parts = argument.split(separator: ",").map(String.init)
+            let orders: [String: ListOrder] = ["manual": .manual, "az": .nameAscending, "za": .nameDescending]
+            guard parts.count == 2, let order = orders[parts[1]],
+                  let collection = model.workspace.collections.first(where: { $0.name == parts[0] }) else { return log("requestorder: bad arguments") }
+            model.setRequestOrder(order, of: collection.id)
+        case "shown":
+            // A collection's rows as the sidebar shows them.
+            guard let collection = model.workspace.collections.first(where: { $0.name == argument }) else { return log("shown: no such collection") }
+            let rows = SidebarView.treeRows(model: model).filter { $0.collectionID == collection.id && $0.depth > 0 }
+            log("shown: " + rows.map { row -> String in
+                let name = switch row.content {
+                case .collection(let collection): collection.name
+                case .folder(let folder): folder.name + "/"
+                case .request(let request): request.name
+                case .fork(let fork): "fork " + fork.name
+                }
+                return String(repeating: "  ", count: row.depth - 1) + name
+            }.joined(separator: " | "))
+        case "tree":
+            guard let collection = model.workspace.collections.first(where: { $0.name == argument }) else { return log("tree: no such collection") }
+            func lines(_ nodes: [CollectionNode], depth: Int) -> [String] {
+                nodes.flatMap { node -> [String] in
+                    switch node {
+                    case .request(let request): [String(repeating: "  ", count: depth) + request.name]
+                    case .folder(let folder): [String(repeating: "  ", count: depth) + folder.name + "/"] + lines(folder.items, depth: depth + 1)
+                    }
+                }
+            }
+            log("tree: " + lines(collection.items, depth: 0).joined(separator: " | "))
+        case "nodehover":
+            // A request or a folder over the row of this name, the pointer at this fraction of its height.
+            let parts = argument.split(separator: ",").map(String.init)
+            guard parts.count == 2, let fraction = Double(parts[1]) else { return log("nodehover: bad arguments") }
+            let shell = ShellState.shared
+            if let collection = model.workspace.collections.first(where: { $0.name == parts[0] }) {
+                shell.hoverNode(over: collection.id, at: fraction, as: .collection, in: model)
+            } else if let fork = model.workspace.forks.first(where: { $0.name == parts[0] }) {
+                shell.hoverNode(over: fork.id, at: fraction, as: .fork(original: fork.originID), in: model)
+            } else if let collection = model.workspace.collections.first(where: { collection in folders(in: collection.items).contains { $0.name == parts[0] } }),
+                      let folder = folders(in: collection.items).first(where: { $0.name == parts[0] }) {
+                shell.hoverNode(over: folder.id, at: fraction, as: .folder(collection: collection.id), in: model)
+            } else if let request = model.workspace.collections.lazy.flatMap(\.allRequests).first(where: { $0.name == parts[0] }) {
+                shell.hoverNode(over: request.id, at: fraction, as: .request, in: model)
+            } else {
+                return log("nodehover: nothing named \(parts[0])")
+            }
+            log("landing: \(landingText(model))")
         case "dragcancel":
             ShellState.shared.putDown()
         case "movecollection", "moveenvironment":
@@ -413,6 +483,22 @@ enum DebugHarness {
             if let nested = firstFolder(named: name, in: folder.items) { return nested }
         }
         return nil
+    }
+
+    private static func folders(in nodes: [CollectionNode]) -> [Folder] {
+        nodes.flatMap { node -> [Folder] in
+            guard case .folder(let folder) = node else { return [] }
+            return [folder] + folders(in: folder.items)
+        }
+    }
+
+    /// The mark a drag in flight draws, in words.
+    private static func landingText(_ model: AppModel) -> String {
+        guard let landing = ShellState.shared.landing else { return "none" }
+        let names = model.workspace.collections.flatMap { collection in
+            [(collection.id, collection.name)] + collection.allRequests.map { ($0.id, $0.name) } + folders(in: collection.items).map { ($0.id, $0.name) }
+        } + model.workspace.forks.map { ($0.id, $0.name) } + model.workspace.environments.map { ($0.id, $0.name) }
+        return "\(landing.mark) \(names.first { $0.0 == landing.row }?.1 ?? "?")"
     }
 
     private static func mainWindow() -> NSWindow? {

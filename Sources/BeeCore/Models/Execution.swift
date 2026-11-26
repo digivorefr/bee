@@ -274,6 +274,9 @@ public struct AppSettings: Hashable, Sendable, Codable {
     /// How the sidebar orders the collections and the environments.
     public var collectionOrder: ListOrder
     public var environmentOrder: ListOrder
+    /// How the sidebar orders what each collection holds, by collection identifier. A collection not
+    /// listed shows it as arranged. Kept on this Mac: the collection file keeps the order arranged.
+    public var requestOrders: [String: ListOrder]
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
@@ -281,7 +284,8 @@ public struct AppSettings: Hashable, Sendable, Codable {
         responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil,
         checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil, collectionsFolder: String? = nil,
         agentsEnabled: Bool = false, agentAccess: AgentAccess = .read, agentCollections: [UUID] = [],
-        agentPrograms: [String] = [], collectionOrder: ListOrder = .manual, environmentOrder: ListOrder = .manual
+        agentPrograms: [String] = [], collectionOrder: ListOrder = .manual, environmentOrder: ListOrder = .manual,
+        requestOrders: [String: ListOrder] = [:]
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -299,13 +303,14 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.agentPrograms = agentPrograms
         self.collectionOrder = collectionOrder
         self.environmentOrder = environmentOrder
+        self.requestOrders = requestOrders
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
         case lastRunVersion, checksForUpdates, lastUpdateCheck, collectionsFolder
         case agentsEnabled, agentAccess, agentCollections, agentPrograms
-        case collectionOrder, environmentOrder
+        case collectionOrder, environmentOrder, requestOrders
     }
 
     public init(from decoder: Decoder) throws {
@@ -329,6 +334,9 @@ public struct AppSettings: Hashable, Sendable, Codable {
         // An order a later version adds reads as the one the person arranged.
         collectionOrder = (try? container.decodeIfPresent(ListOrder.self, forKey: .collectionOrder)) ?? .manual
         environmentOrder = (try? container.decodeIfPresent(ListOrder.self, forKey: .environmentOrder)) ?? .manual
+        // One order a later version adds is left out, not all of them.
+        let orders = (try? container.decodeIfPresent([String: String].self, forKey: .requestOrders)) ?? [:]
+        requestOrders = orders.compactMapValues(ListOrder.init(rawValue:))
     }
 }
 

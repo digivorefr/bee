@@ -792,50 +792,33 @@ final class AppModel {
     /// Puts a collection where the person dropped it: in the place of `target`, as the list is shown.
     /// From then on the collections keep the order the person gives them.
     func moveCollection(_ id: UUID, toPlaceOf target: UUID) {
-        arrangeCollections(settings.collectionOrder.moving(id, toPlaceOf: target, in: workspace.collections, name: \.name))
+        arrange(\.collections, by: \.collectionOrder, called: "Collections") { $0.moving(id, toPlaceOf: target, in: $1, name: \.name) }
     }
 
     /// Moves a collection one place up (`-1`) or down (`1`) the list as shown.
     func moveCollection(_ id: UUID, by step: Int) {
-        arrangeCollections(settings.collectionOrder.moving(id, by: step, in: workspace.collections, name: \.name))
+        arrange(\.collections, by: \.collectionOrder, called: "Collections") { $0.moving(id, by: step, in: $1, name: \.name) }
     }
 
     func moveEnvironment(_ id: UUID, toPlaceOf target: UUID) {
-        arrangeEnvironments(settings.environmentOrder.moving(id, toPlaceOf: target, in: workspace.environments, name: \.name))
+        arrange(\.environments, by: \.environmentOrder, called: "Environments") { $0.moving(id, toPlaceOf: target, in: $1, name: \.name) }
     }
 
     func moveEnvironment(_ id: UUID, by step: Int) {
-        arrangeEnvironments(settings.environmentOrder.moving(id, by: step, in: workspace.environments, name: \.name))
+        arrange(\.environments, by: \.environmentOrder, called: "Environments") { $0.moving(id, by: step, in: $1, name: \.name) }
     }
 
-    /// Gives the collections the order of these identifiers, as a person left them on screen. One that
-    /// is not listed (added meanwhile) keeps its place after them.
-    func arrangeCollections(as ids: [UUID]) {
-        let all = workspace.collections
-        arrangeCollections(ids.compactMap { id in all.first { $0.id == id } } + all.filter { !ids.contains($0.id) })
-    }
-
-    func arrangeEnvironments(as ids: [UUID]) {
-        let all = workspace.environments
-        arrangeEnvironments(ids.compactMap { id in all.first { $0.id == id } } + all.filter { !ids.contains($0.id) })
-    }
-
-    private func arrangeCollections(_ arranged: [Collection]?) {
-        guard let arranged else { return }
-        mutate { $0.collections = arranged }
-        if settings.collectionOrder != .manual {
-            settings.collectionOrder = .manual
-            inform("Collections now keep the order you give them. The menu of their heading sorts them by name again.")
-        }
-    }
-
-    private func arrangeEnvironments(_ arranged: [BeeCore.Environment]?) {
-        guard let arranged else { return }
-        mutate { $0.environments = arranged }
-        if settings.environmentOrder != .manual {
-            settings.environmentOrder = .manual
-            inform("Environments now keep the order you give them. The menu of their heading sorts them by name again.")
-        }
+    /// Gives a list of the sidebar the order `move` makes of it, from the order it is shown in. A list
+    /// sorted by name keeps the order the person gives it from then on.
+    private func arrange<Item>(
+        _ list: WritableKeyPath<Workspace, [Item]>, by order: WritableKeyPath<AppSettings, ListOrder>, called name: String,
+        _ move: (ListOrder, [Item]) -> [Item]?
+    ) {
+        guard let arranged = move(settings[keyPath: order], workspace[keyPath: list]) else { return }
+        mutate { $0[keyPath: list] = arranged }
+        guard settings[keyPath: order] != .manual else { return }
+        settings[keyPath: order] = .manual
+        inform("\(name) now keep the order you give them. The menu of their heading sorts them by name again.")
     }
 
     @discardableResult
@@ -894,6 +877,7 @@ final class AppModel {
         guard let collection = collection(id: collectionID) else { return }
         collection.items.forEach(dropSessions)
         mutate { $0.collections.removeAll { $0.id == collectionID } }
+        setRequestOrder(.manual, of: collectionID)
         removeForks(ofRequestsIn: collection.items)
         repairSelection()
     }
@@ -925,11 +909,7 @@ final class AppModel {
         // A fork stays with its original.
         guard workspace.fork(id: nodeID) == nil else { return }
         // A folder cannot move into itself or one of its descendants.
-        if let folderID, folderID == nodeID { return }
-        if let folderID, let source = workspace.collection(containing: nodeID),
-           let path = source.ancestry(of: folderID), path.contains(where: { $0.id == nodeID }) {
-            return
-        }
+        if let folderID, workspace.collection(containing: nodeID)?.isFolder(folderID, within: nodeID) == true { return }
         mutate { workspace in
             var node: CollectionNode?
             if let draftIndex = workspace.scratchRequests.firstIndex(where: { $0.id == nodeID }) {
@@ -943,6 +923,72 @@ final class AppModel {
             }
         }
         for session in sessions.values { refresh(session) }
+    }
+
+    /// Puts a request or a folder right before or right after another node of a collection as it is shown,
+    /// as a person drops it there. A request from the drafts or from another collection moves there too.
+    func moveNode(_ nodeID: UUID, beside target: UUID, after: Bool) {
+        guard let landing = landing(of: nodeID, beside: target, after: after) else { return }
+        // The rows are where they are shown: a collection sorted by name takes that order first.
+        arrangeAsShown(landing.collectionID)
+        moveNode(nodeID, toCollection: landing.collectionID, folder: landing.folderID, at: landing.index)
+    }
+
+    /// True when a request or a folder put right before or right after `target` would move.
+    func canMoveNode(_ nodeID: UUID, beside target: UUID, after: Bool) -> Bool {
+        landing(of: nodeID, beside: target, after: after) != nil
+    }
+
+    /// Where a request or a folder put beside `target` goes, said of its collection as shown: the order the
+    /// collection takes as its own before it moves. A node of another collection, or a draft, has no place
+    /// there yet: only the target's place counts.
+    private func landing(of nodeID: UUID, beside target: UUID, after: Bool) -> (collectionID: UUID, folderID: UUID?, index: Int)? {
+        guard let collection = workspace.collection(containing: target),
+              let destination = shown(collection).destination(of: nodeID, beside: target, after: after) else { return nil }
+        return (collection.id, destination.folderID, destination.index)
+    }
+
+    /// A collection as the sidebar shows what it holds.
+    private func shown(_ collection: Collection) -> Collection {
+        collection.arranged(requestOrder(of: collection.id))
+    }
+
+    /// What holds a request or a folder, itself included, as the sidebar shows it.
+    private func shownSiblings(of nodeID: UUID) -> [CollectionNode]? {
+        workspace.collection(containing: nodeID).flatMap { shown($0).siblings(of: nodeID) }
+    }
+
+    /// How the sidebar orders what a collection holds.
+    func requestOrder(of collectionID: UUID) -> ListOrder {
+        settings.requestOrders[collectionID.uuidString] ?? .manual
+    }
+
+    func setRequestOrder(_ order: ListOrder, of collectionID: UUID) {
+        settings.requestOrders[collectionID.uuidString] = order == .manual ? nil : order
+    }
+
+    /// A collection sorted by name takes the order it is shown in as its own, as a person starts moving
+    /// its requests by hand: from then on it keeps the order they give it.
+    private func arrangeAsShown(_ collectionID: UUID) {
+        let order = requestOrder(of: collectionID)
+        guard order != .manual, let index = workspace.collections.firstIndex(where: { $0.id == collectionID }) else { return }
+        let name = workspace.collections[index].name
+        mutate { $0.collections[index].items = order.arrangedDeeply($0.collections[index].items) }
+        setRequestOrder(.manual, of: collectionID)
+        inform("“\(name)” now keeps the order you give its requests. Its menu sorts them by name again.")
+    }
+
+    /// Where a request or a folder stands among what holds it, as shown, and how many that holds.
+    func position(of nodeID: UUID) -> (index: Int, count: Int)? {
+        guard let siblings = shownSiblings(of: nodeID), let index = siblings.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        return (index, siblings.count)
+    }
+
+    /// Moves a request or a folder one place up (`-1`) or down (`1`) among what holds it, as shown.
+    func moveNode(_ nodeID: UUID, by step: Int) {
+        guard let siblings = shownSiblings(of: nodeID), let index = siblings.firstIndex(where: { $0.id == nodeID }),
+              siblings.indices.contains(index + step) else { return }
+        moveNode(nodeID, beside: siblings[index + step].id, after: step > 0)
     }
 
     private func repairSelection() {

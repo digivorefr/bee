@@ -67,6 +67,80 @@ import Testing
         #expect(Self.ids(ListOrder.nameDescending.moving(3, by: 1, in: Self.items, name: \.name)) == [5, 1, 6, 2, 3, 4])
     }
 
+    @Test func aRequestOrAFolderGoesRightBeforeOrAfterAnother() throws {
+        let a = RequestItem(name: "A"), b = RequestItem(name: "B"), c = RequestItem(name: "C"), d = RequestItem(name: "D")
+        let inner = Folder(name: "Inner", items: [.request(d)])
+        let folder = Folder(name: "F", items: [.request(c), .folder(inner)])
+        let collection = Collection(name: "API", items: [.request(a), .request(b), .folder(folder)])
+        #expect(collection.place(of: b.id)! == (nil, 1))
+        #expect(collection.place(of: d.id)! == (inner.id, 0))
+        #expect(collection.place(of: UUID()) == nil)
+
+        // Down among the same: after the target, counted once it has left its place.
+        #expect(collection.destination(of: a.id, beside: b.id, after: true)! == (nil, 1))
+        #expect(collection.destination(of: a.id, beside: folder.id, after: false)! == (nil, 1))
+        // Up among the same.
+        #expect(collection.destination(of: folder.id, beside: a.id, after: false)! == (nil, 0))
+        // Into another folder, beside what it holds.
+        #expect(collection.destination(of: a.id, beside: c.id, after: false)! == (folder.id, 0))
+        #expect(collection.destination(of: a.id, beside: d.id, after: true)! == (inner.id, 1))
+        // Where it already stands, or on itself: nothing moves.
+        #expect(collection.destination(of: a.id, beside: b.id, after: false) == nil)
+        #expect(collection.destination(of: b.id, beside: a.id, after: true) == nil)
+        #expect(collection.destination(of: a.id, beside: a.id, after: true) == nil)
+        // A folder never goes inside itself or what it holds.
+        #expect(collection.destination(of: folder.id, beside: c.id, after: false) == nil)
+        #expect(collection.destination(of: folder.id, beside: d.id, after: true) == nil)
+        // A request from elsewhere (another collection, a draft) takes the target's place.
+        #expect(collection.destination(of: UUID(), beside: b.id, after: false)! == (nil, 1))
+    }
+
+    @Test func aMoveInACollectionSortedByNameStartsFromWhatIsShown() throws {
+        let path = RequestItem(name: "Get by path variable"), json = RequestItem(name: "Send JSON")
+        let teapot = RequestItem(name: "Teapot"), token = RequestItem(name: "Get a token")
+        let inner = Folder(name: "Inner")
+        let flow = Folder(name: "Token flow", items: [.request(token), .folder(inner)])
+        let collection = Collection(name: "API", items: [.request(path), .request(json), .folder(flow), .request(teapot)])
+        // As arranged, right before what follows it: nothing moves.
+        #expect(collection.destination(of: path.id, beside: json.id, after: false) == nil)
+        // Sorted Z to A, it stands last: right before Send JSON is a move, right after it is where it is.
+        let shown = collection.arranged(.nameDescending)
+        #expect(shown.items.map(\.name) == ["Token flow", "Teapot", "Send JSON", "Get by path variable"])
+        #expect(try #require(shown.destination(of: path.id, beside: json.id, after: false)) == (nil, 2))
+        #expect(shown.destination(of: path.id, beside: json.id, after: true) == nil)
+        #expect(collection.arranged(.manual).items.map(\.id) == collection.items.map(\.id))
+        // What holds a node, itself included.
+        #expect(shown.siblings(of: token.id)?.map(\.id) == [inner.id, token.id])
+        #expect(shown.siblings(of: teapot.id)?.count == 4)
+        #expect(shown.siblings(of: UUID()) == nil)
+        // A folder does not go into itself or what it holds.
+        #expect(collection.isFolder(flow.id, within: flow.id))
+        #expect(collection.isFolder(inner.id, within: flow.id))
+        #expect(!collection.isFolder(flow.id, within: inner.id))
+        #expect(!collection.isFolder(flow.id, within: path.id))
+    }
+
+    @Test func whatACollectionHoldsIsSortedByNameFoldersFirst() {
+        let inner = [CollectionNode.request(RequestItem(name: "zeta")), .request(RequestItem(name: "Alpha"))]
+        let nodes: [CollectionNode] = [
+            .request(RequestItem(name: "Teapot")), .folder(Folder(name: "Token flow", items: inner)),
+            .request(RequestItem(name: "Get 10")), .folder(Folder(name: "Admin")), .request(RequestItem(name: "Get 2")),
+        ]
+        func names(_ nodes: [CollectionNode]) -> [String] { nodes.map(\.name) }
+        #expect(names(ListOrder.manual.arranged(nodes)) == ["Teapot", "Token flow", "Get 10", "Admin", "Get 2"])
+        #expect(names(ListOrder.nameAscending.arranged(nodes)) == ["Admin", "Token flow", "Get 2", "Get 10", "Teapot"])
+        #expect(names(ListOrder.nameDescending.arranged(nodes)) == ["Token flow", "Admin", "Teapot", "Get 10", "Get 2"])
+        // One level for what is shown; every level for the order a collection takes as its own.
+        let shown = ListOrder.nameAscending.arranged(nodes)
+        guard case .folder(let kept) = shown[1], case .folder(let sorted) = ListOrder.nameAscending.arrangedDeeply(nodes)[1] else {
+            Issue.record("Token flow is not where it should be")
+            return
+        }
+        #expect(names(kept.items) == ["zeta", "Alpha"])
+        #expect(names(sorted.items) == ["Alpha", "zeta"])
+        #expect(names(ListOrder.manual.arrangedDeeply(nodes)) == names(nodes))
+    }
+
     @Test func theOrderOfEachListIsKeptWithTheSettings() throws {
         var settings = AppSettings()
         #expect(settings.collectionOrder == .manual && settings.environmentOrder == .manual)
@@ -79,5 +153,10 @@ import Testing
         #expect(older.collectionOrder == .manual && older.timeout == 10)
         let later = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"collectionOrder": "byDate"}"#.utf8))
         #expect(later.collectionOrder == .manual)
+        // The order of what each collection holds: one this version does not know is left out, not all.
+        settings.requestOrders = ["A": .nameAscending]
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)).requestOrders == ["A": .nameAscending])
+        let mixed = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"requestOrders": {"A": "nameDescending", "B": "byDate"}}"#.utf8))
+        #expect(mixed.requestOrders == ["A": .nameDescending])
     }
 }
