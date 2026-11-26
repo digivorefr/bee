@@ -781,6 +781,63 @@ final class AppModel {
 
     // MARK: Collections and folders
 
+    // MARK: Order of the sidebar
+
+    /// The collections in the order the sidebar shows them.
+    var shownCollections: [Collection] { settings.collectionOrder.arranged(workspace.collections, name: \.name) }
+
+    /// The environments in the order the sidebar shows them.
+    var shownEnvironments: [BeeCore.Environment] { settings.environmentOrder.arranged(workspace.environments, name: \.name) }
+
+    /// Puts a collection where the person dropped it: in the place of `target`, as the list is shown.
+    /// From then on the collections keep the order the person gives them.
+    func moveCollection(_ id: UUID, toPlaceOf target: UUID) {
+        arrangeCollections(settings.collectionOrder.moving(id, toPlaceOf: target, in: workspace.collections, name: \.name))
+    }
+
+    /// Moves a collection one place up (`-1`) or down (`1`) the list as shown.
+    func moveCollection(_ id: UUID, by step: Int) {
+        arrangeCollections(settings.collectionOrder.moving(id, by: step, in: workspace.collections, name: \.name))
+    }
+
+    func moveEnvironment(_ id: UUID, toPlaceOf target: UUID) {
+        arrangeEnvironments(settings.environmentOrder.moving(id, toPlaceOf: target, in: workspace.environments, name: \.name))
+    }
+
+    func moveEnvironment(_ id: UUID, by step: Int) {
+        arrangeEnvironments(settings.environmentOrder.moving(id, by: step, in: workspace.environments, name: \.name))
+    }
+
+    /// Gives the collections the order of these identifiers, as a person left them on screen. One that
+    /// is not listed (added meanwhile) keeps its place after them.
+    func arrangeCollections(as ids: [UUID]) {
+        let all = workspace.collections
+        arrangeCollections(ids.compactMap { id in all.first { $0.id == id } } + all.filter { !ids.contains($0.id) })
+    }
+
+    func arrangeEnvironments(as ids: [UUID]) {
+        let all = workspace.environments
+        arrangeEnvironments(ids.compactMap { id in all.first { $0.id == id } } + all.filter { !ids.contains($0.id) })
+    }
+
+    private func arrangeCollections(_ arranged: [Collection]?) {
+        guard let arranged else { return }
+        mutate { $0.collections = arranged }
+        if settings.collectionOrder != .manual {
+            settings.collectionOrder = .manual
+            inform("Collections now keep the order you give them. The menu of their heading sorts them by name again.")
+        }
+    }
+
+    private func arrangeEnvironments(_ arranged: [BeeCore.Environment]?) {
+        guard let arranged else { return }
+        mutate { $0.environments = arranged }
+        if settings.environmentOrder != .manual {
+            settings.environmentOrder = .manual
+            inform("Environments now keep the order you give them. The menu of their heading sorts them by name again.")
+        }
+    }
+
     @discardableResult
     func newCollection() -> UUID {
         let collection = Collection()

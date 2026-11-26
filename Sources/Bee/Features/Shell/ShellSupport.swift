@@ -19,6 +19,8 @@ enum ShellMetrics {
     static let methodColumn: CGFloat = Theme.Space.xxl + Theme.Space.xl
     /// A bare table row.
     static let tableRow: CGFloat = Theme.Space.xl + Theme.Space.xs
+    /// From the text of a sidebar row to halfway to the next one: where the line of a drop is drawn.
+    static let rowGap: CGFloat = Theme.Space.xs + 2
     static let variableNameColumn: CGFloat = 220
     static let settingsWidth: CGFloat = 460
     static let pageMaxWidth: CGFloat = 860
@@ -101,6 +103,91 @@ final class ShellState {
     var pendingDelete: PendingDelete?
     /// The fork whose merge is being reviewed.
     var mergingFork: UUID?
+    /// The collection or environment being dragged, and where it would land.
+    var picked: Picked?
+    var landing: Landing?
+
+    /// A collection or an environment taken by the pointer.
+    struct Picked: Equatable {
+        enum List { case collections, environments }
+
+        let token = UUID()
+        let list: List
+        let id: UUID
+    }
+
+    /// Where the picked one would land: a line drawn above or below a row. Nothing in the list moves
+    /// while the drag goes on (the list follows the pointer by its rows, which must stay where they are);
+    /// the rows move once it is dropped.
+    struct Landing: Equatable {
+        /// The row it would take the place of.
+        let target: UUID
+        /// The row the line is drawn on, and on which edge.
+        let row: UUID
+        let isBelow: Bool
+    }
+
+    /// What a row hands to a drag as it begins: its payload, the row noted as picked up on the way.
+    func picking(_ list: Picked.List, _ id: UUID, as payload: String) -> String {
+        pickUp(list, id)
+        return payload
+    }
+
+    /// A row is picked up. Unless told otherwise (a harness), the drag is watched: once the button is up
+    /// and no drop came, the line goes.
+    func pickUp(_ list: Picked.List, _ id: UUID, watchingMouse: Bool = true) {
+        let started = Picked(list: list, id: id)
+        picked = started
+        landing = nil
+        guard watchingMouse else { return }
+        Task { @MainActor in
+            while picked?.token == started.token, NSEvent.pressedMouseButtons & 1 != 0 {
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            // A drop on the list arrives as the button comes up, once what was dragged is read.
+            try? await Task.sleep(for: .milliseconds(800))
+            if picked?.token == started.token { putDown() }
+        }
+    }
+
+    /// The pointer over `target` (`isOver`) or leaving it. `order` is the list as shown; `lastRow` the
+    /// last row a target fills on screen (a collection and what it holds). The picked one takes the place
+    /// of the target: below it coming from above, above it coming from below.
+    func hover(_ list: Picked.List, over target: UUID, isOver: Bool, order: [UUID], lastRow: (UUID) -> UUID = { $0 }) {
+        guard isOver else {
+            if landing?.target == target { landing = nil }
+            return
+        }
+        guard let picked, picked.list == list, picked.id != target,
+              let from = order.firstIndex(of: picked.id), let to = order.firstIndex(of: target) else {
+            landing = nil
+            return
+        }
+        landing = from < to ? Landing(target: target, row: lastRow(target), isBelow: true) : Landing(target: target, row: target, isBelow: false)
+    }
+
+    /// Dropped on `target`: the picked one takes its place, the others moving aside. False when nothing of
+    /// this list was picked up.
+    func drop(_ list: Picked.List, on target: UUID, in model: AppModel) -> Bool {
+        guard let done = picked, done.list == list else { return false }
+        putDown()
+        // Once the drag is over, not while the list still ends it: its rows then move with an animation.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            withAnimation(.snappy(duration: 0.25)) {
+                switch list {
+                case .collections: model.moveCollection(done.id, toPlaceOf: target)
+                case .environments: model.moveEnvironment(done.id, toPlaceOf: target)
+                }
+            }
+        }
+        return true
+    }
+
+    func putDown() {
+        picked = nil
+        landing = nil
+    }
 
     func isCollectionExpanded(_ id: UUID) -> Bool { !toggled.contains(id) }
     func isFolderExpanded(_ id: UUID) -> Bool { toggled.contains(id) }

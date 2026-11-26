@@ -25,19 +25,27 @@ struct SidebarView: View {
                     treeRow(row)
                 }
             } header: {
-                SidebarSectionHeader(title: "Collections", addLabel: "New collection") {
+                SidebarSectionHeader(title: "Collections", addLabel: "New collection", order: $model.settings.collectionOrder) {
                     model.newCollection()
                 }
             }
             .collapsible(false)
             Section {
-                ForEach(model.workspace.environments) { environment in
+                ForEach(model.shownEnvironments) { environment in
                     environmentRow(environment)
                 }
                 SidebarRow(selection: .globals, name: "Globals", depth: 0, kind: .leaf(glyph: "curlybraces"))
                     .tag(SidebarSelection.globals)
+                    // An environment dropped here goes last, right above it.
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let last = model.shownEnvironments.last else { return false }
+                        return dropEnvironment(items, on: last.id)
+                    } isTargeted: { isOver in
+                        guard let last = model.shownEnvironments.last else { return }
+                        shell.hover(.environments, over: last.id, isOver: isOver, order: model.shownEnvironments.map(\.id))
+                    }
             } header: {
-                SidebarSectionHeader(title: "Environments", addLabel: "New environment") {
+                SidebarSectionHeader(title: "Environments", addLabel: "New environment", order: $model.settings.environmentOrder) {
                     model.newEnvironment()
                 }
             }
@@ -78,7 +86,7 @@ struct SidebarView: View {
 
     // MARK: Tree
 
-    private struct TreeRow: Identifiable {
+    struct TreeRow: Identifiable {
         enum Content {
             case collection(Collection)
             case folder(Folder)
@@ -101,7 +109,7 @@ struct SidebarView: View {
     }
 
     /// The collections tree as the rows on screen: closed rows hide what they hold.
-    private var treeRows: [TreeRow] {
+    static func treeRows(model: AppModel, shell: ShellState = .shared) -> [TreeRow] {
         var rows: [TreeRow] = []
         func walk(_ nodes: [CollectionNode], collectionID: UUID, depth: Int) {
             for node in nodes {
@@ -120,7 +128,7 @@ struct SidebarView: View {
                 }
             }
         }
-        for collection in model.workspace.collections {
+        for collection in model.shownCollections {
             rows.append(TreeRow(content: .collection(collection), collectionID: collection.id, depth: 0))
             if shell.isCollectionExpanded(collection.id) {
                 walk(collection.items, collectionID: collection.id, depth: 1)
@@ -128,6 +136,8 @@ struct SidebarView: View {
         }
         return rows
     }
+
+    private var treeRows: [TreeRow] { Self.treeRows(model: model, shell: shell) }
 
     @ViewBuilder
     private func treeRow(_ row: TreeRow) -> some View {
@@ -139,12 +149,26 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: Landing
+
+    /// The edge of a row where the line of a drag in flight is drawn.
+    private func landingEdge(of rowID: UUID) -> VerticalEdge? {
+        guard let landing = shell.landing, landing.row == rowID else { return nil }
+        return landing.isBelow ? .bottom : .top
+    }
+
+    /// The last row a collection fills on screen: itself when closed, what it holds last when open.
+    static func lastRow(of collectionID: UUID, model: AppModel) -> UUID {
+        treeRows(model: model).last { $0.collectionID == collectionID }?.id ?? collectionID
+    }
+
     // MARK: Rows
 
     private func requestRow(_ request: RequestItem, depth: Int, isInCollection: Bool) -> some View {
         let selection = SidebarSelection.request(request.id)
         return SidebarRow(
             selection: selection, name: request.name, depth: depth, kind: .request(request.method),
+            landingEdge: landingEdge(of: request.id),
             hasForks: isInCollection && !model.workspace.forks(of: request.id).isEmpty,
             rename: { model.renameRequest(request.id, to: $0) }
         )
@@ -167,6 +191,7 @@ struct SidebarView: View {
         let selection = SidebarSelection.request(fork.id)
         return SidebarRow(
             selection: selection, name: fork.name, depth: depth, kind: .fork,
+            landingEdge: landingEdge(of: fork.id),
             rename: { model.renameFork(fork.id, to: $0) }
         )
         .tag(selection)
@@ -186,6 +211,7 @@ struct SidebarView: View {
             kind: .container(glyph: "folder", isExpanded: shell.isFolderExpanded(folder.id)) {
                 shell.toggle(folder.id)
             },
+            landingEdge: landingEdge(of: folder.id),
             rename: { name in
                 guard var current = model.folder(id: folder.id) else { return }
                 current.name = name
@@ -196,6 +222,12 @@ struct SidebarView: View {
         .draggable(SidebarDrag.payload(for: folder.id))
         .dropDestination(for: String.self) { items, _ in
             drop(items, onCollection: collectionID, folder: folder.id)
+        } isTargeted: { isOver in
+            // A collection dropped on one of its folders takes the place of the collection: the line says so.
+            shell.hover(
+                .collections, over: collectionID, isOver: isOver, order: model.shownCollections.map(\.id),
+                lastRow: { Self.lastRow(of: $0, model: model) }
+            )
         }
         .contextMenu {
             Button("New request") { ShellActions.newRequest(model, inCollection: collectionID, folder: folder.id) }
@@ -214,6 +246,8 @@ struct SidebarView: View {
             kind: .container(glyph: "hexagon", isExpanded: shell.isCollectionExpanded(collection.id)) {
                 shell.toggle(collection.id)
             },
+            isLifted: shell.landing != nil && shell.picked?.id == collection.id,
+            landingEdge: landingEdge(of: collection.id),
             rename: { name in
                 guard var current = model.collection(id: collection.id) else { return }
                 current.name = name
@@ -221,8 +255,16 @@ struct SidebarView: View {
             }
         )
         .tag(selection)
+        // `draggable`, not `onDrag`: SwiftUI calls an `onDrag` for the first drag of a row only. What it
+        // drags is asked for as the drag begins, which tells the shell what was picked up.
+        .draggable(shell.picking(.collections, collection.id, as: SidebarDrag.payload(collection: collection.id)))
         .dropDestination(for: String.self) { items, _ in
             drop(items, onCollection: collection.id, folder: nil)
+        } isTargeted: { isOver in
+            shell.hover(
+                .collections, over: collection.id, isOver: isOver, order: model.shownCollections.map(\.id),
+                lastRow: { Self.lastRow(of: $0, model: model) }
+            )
         }
         .contextMenu {
             Button("New request") { ShellActions.newRequest(model, inCollection: collection.id, folder: nil) }
@@ -230,6 +272,12 @@ struct SidebarView: View {
             Divider()
             Button("Rename") { beginRename(selection, name: collection.name) }
             Button("Export…") { ShellActions.exportCollection(collection.id, model: model) }
+            Divider()
+            let shown = model.shownCollections.map(\.id)
+            Button("Move Up") { model.moveCollection(collection.id, by: -1) }
+                .disabled(shown.first == collection.id)
+            Button("Move Down") { model.moveCollection(collection.id, by: 1) }
+                .disabled(shown.last == collection.id)
             Divider()
             Button("Delete", role: .destructive) { ShellActions.deleteCollection(collection, model: model) }
         }
@@ -240,7 +288,8 @@ struct SidebarView: View {
         let isActive = model.workspace.activeEnvironmentID == environment.id
         return SidebarRow(
             selection: selection, name: environment.name, depth: 0, kind: .leaf(glyph: "globe"),
-            isActive: isActive,
+            isActive: isActive, isLifted: shell.landing != nil && shell.picked?.id == environment.id,
+            landingEdge: landingEdge(of: environment.id),
             rename: { name in
                 guard var current = model.environment(id: environment.id) else { return }
                 current.name = name
@@ -248,6 +297,12 @@ struct SidebarView: View {
             }
         )
         .tag(selection)
+        .draggable(shell.picking(.environments, environment.id, as: SidebarDrag.payload(environment: environment.id)))
+        .dropDestination(for: String.self) { items, _ in
+            dropEnvironment(items, on: environment.id)
+        } isTargeted: { isOver in
+            shell.hover(.environments, over: environment.id, isOver: isOver, order: model.shownEnvironments.map(\.id))
+        }
         .contextMenu {
             Button("Make active") { model.setActiveEnvironment(environment.id) }
                 .disabled(isActive)
@@ -255,6 +310,12 @@ struct SidebarView: View {
             Button("Rename") { beginRename(selection, name: environment.name) }
             Button("Duplicate") { model.duplicateEnvironment(environment.id) }
             Button("Export…") { ShellActions.exportEnvironment(environment.id, model: model) }
+            Divider()
+            let shown = model.shownEnvironments.map(\.id)
+            Button("Move Up") { model.moveEnvironment(environment.id, by: -1) }
+                .disabled(shown.first == environment.id)
+            Button("Move Down") { model.moveEnvironment(environment.id, by: 1) }
+                .disabled(shown.last == environment.id)
             Divider()
             Button("Delete", role: .destructive) {
                 shell.pendingDelete = .environment(id: environment.id, name: environment.name)
@@ -318,11 +379,28 @@ struct SidebarView: View {
 
     // MARK: Drop
 
-    /// Moves the dragged requests and folders into the target; a dropped file path is imported.
+    /// An environment dropped on another takes its place; a dropped file path is imported.
+    @discardableResult
+    private func dropEnvironment(_ items: [String], on target: UUID) -> Bool {
+        if let dragged = items.lazy.compactMap(SidebarDrag.environmentID(from:)).first {
+            // Without a pick-up seen (none was seen to start), it takes the target's place all the same.
+            if !shell.drop(.environments, on: target, in: model) { model.moveEnvironment(dragged, toPlaceOf: target) }
+            return true
+        }
+        let files = items.compactMap(SidebarDrag.fileURL(from:))
+        return !files.isEmpty && ShellActions.importFiles(files, model: model)
+    }
+
+    /// Moves the dragged requests and folders into the target; a dropped file path is imported. A
+    /// collection dropped on another one, or on one of its folders, takes its place.
     @discardableResult
     private func drop(_ items: [String], onCollection collectionID: UUID, folder folderID: UUID?) -> Bool {
         var handled = false
         for item in items {
+            if let dragged = SidebarDrag.collectionID(from: item) {
+                if !shell.drop(.collections, on: collectionID, in: model) { model.moveCollection(dragged, toPlaceOf: collectionID) }
+                return true
+            }
             if let nodeID = SidebarDrag.nodeID(from: item) {
                 model.moveNode(nodeID, toCollection: collectionID, folder: folderID)
                 handled = true
@@ -340,13 +418,22 @@ struct SidebarView: View {
 
 // MARK: - Drag payload
 
-/// A dragged request or folder travels as text so the sidebar needs no exported type.
+/// A dragged request, folder, collection or environment travels as text so the sidebar needs no
+/// exported type.
 enum SidebarDrag {
     private static let prefix = "bee-node:"
+    private static let collectionPrefix = "bee-collection:"
+    private static let environmentPrefix = "bee-environment:"
 
     static func payload(for nodeID: UUID) -> String { prefix + nodeID.uuidString }
+    static func payload(collection id: UUID) -> String { collectionPrefix + id.uuidString }
+    static func payload(environment id: UUID) -> String { environmentPrefix + id.uuidString }
 
-    static func nodeID(from payload: String) -> UUID? {
+    static func nodeID(from payload: String) -> UUID? { identifier(in: payload, after: prefix) }
+    static func collectionID(from payload: String) -> UUID? { identifier(in: payload, after: collectionPrefix) }
+    static func environmentID(from payload: String) -> UUID? { identifier(in: payload, after: environmentPrefix) }
+
+    private static func identifier(in payload: String, after prefix: String) -> UUID? {
         guard payload.hasPrefix(prefix) else { return nil }
         return UUID(uuidString: String(payload.dropFirst(prefix.count)))
     }
@@ -394,12 +481,41 @@ private struct NewRequestRow: View {
 private struct SidebarSectionHeader: View {
     let title: String
     let addLabel: String
+    @Binding var order: ListOrder
     let add: () -> Void
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             Text(title)
             Spacer(minLength: Theme.Space.s)
+            // How the list is ordered, said in the heading when it is by name.
+            Menu {
+                Picker("Order", selection: $order) {
+                    Text("Manual").tag(ListOrder.manual)
+                    Text("Name, A to Z").tag(ListOrder.nameAscending)
+                    Text("Name, Z to A").tag(ListOrder.nameDescending)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Group {
+                    switch order {
+                    case .manual: Image(systemName: "arrow.up.arrow.down")
+                    case .nameAscending: Text("A–Z")
+                    case .nameDescending: Text("Z–A")
+                    }
+                }
+                // As quiet as the add button beside it, which it looks and answers like.
+                .font(Theme.text(Theme.Size.caption, weight: .medium))
+                .frame(minWidth: Theme.Space.xl, minHeight: Theme.Space.l)
+            }
+            .menuStyle(.button)
+            .buttonStyle(QuietButtonStyle())
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Order of the \(title.lowercased()): \(Self.describe(order))")
+            .accessibilityLabel("Order of the \(title.lowercased())")
+            .accessibilityValue(Self.describe(order))
             Button(action: add) {
                 Image(systemName: "plus")
                     .font(Theme.text(Theme.Size.caption, weight: .medium))
@@ -408,6 +524,14 @@ private struct SidebarSectionHeader: View {
             .buttonStyle(QuietButtonStyle())
             .help(addLabel)
             .accessibilityLabel(addLabel)
+        }
+    }
+
+    private static func describe(_ order: ListOrder) -> String {
+        switch order {
+        case .manual: "manual, drag to move"
+        case .nameAscending: "by name, A to Z"
+        case .nameDescending: "by name, Z to A"
         }
     }
 }
@@ -434,6 +558,10 @@ private struct SidebarRow: View {
     let depth: Int
     let kind: Kind
     var isActive = false
+    /// True for the collection or environment being dragged over the list: it waits, faded, to move.
+    var isLifted = false
+    /// The edge where the dragged one would land, drawn as a line of honey.
+    var landingEdge: VerticalEdge?
     /// True for a request that has forks: the full cell says which one is the original.
     var hasForks = false
     /// `nil` when the row has a fixed name.
@@ -466,6 +594,22 @@ private struct SidebarRow: View {
             }
         }
         .contentShape(Rectangle())
+        .opacity(isLifted ? 0.45 : 1)
+        // Where the dragged one would land: a line of honey between this row and the next, drawn over
+        // the rows so that none of them moves under the pointer.
+        .overlay(alignment: landingEdge == .bottom ? .bottom : .top) {
+            if let landingEdge {
+                // On the very edge of the row (a row draws nothing past it), a cell of honey resting on it.
+                HStack(alignment: landingEdge == .bottom ? .bottom : .top, spacing: 0) {
+                    CellMark(color: Theme.honey, size: Theme.Size.caption - 4)
+                    Capsule().fill(Theme.honey).frame(height: 2)
+                }
+                .offset(y: landingEdge == .bottom ? ShellMetrics.rowGap - 0.5 : 0.5 - ShellMetrics.rowGap)
+                .padding(.leading, CGFloat(depth) * ShellMetrics.indent - Theme.Space.xs)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
     }
 
     @ViewBuilder

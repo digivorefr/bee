@@ -53,7 +53,7 @@ private struct EnvironmentMenu: View {
         let activeName = active?.name ?? "None"
         Menu {
             Picker("Environment", selection: activeBinding) {
-                ForEach(model.workspace.environments) { environment in
+                ForEach(model.shownEnvironments) { environment in
                     Text(environment.name).tag(Optional(environment.id))
                 }
                 Text("No environment").tag(UUID?.none)

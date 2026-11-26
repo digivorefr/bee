@@ -27,6 +27,11 @@ import SwiftUI
 ///     agents:read|run|propose (opens every collection to agents)   agentquestion (logs the question on screen)
 ///     agentanswer:deny|once|untilquit (answers it)                 agentlog (logs what agents did)
 ///     agentwait (until a question is on screen)   agentsoff   waitfile:<path> (until the file exists)
+///     order:collections|environments,manual|az|za   sidebarorder (logs both lists as shown)
+///     dropcollection:<name>><target name>   dropenvironment:<name>><target name> (as a drop does)
+///     movecollection:<name>,up|down   moveenvironment:<name>,up|down (as the menu does)
+///     dragbegin|draghover|dragdrop:collections|environments,<name>|end   dragcancel
+///     (a drag in flight, as the sidebar's rows see it)
 ///
 /// `BEE_UPDATE_FEED=<url>` and `BEE_UPDATE_PUBLIC_KEY=<base64>` point the updater at a local feed.
 ///
@@ -295,6 +300,61 @@ enum DebugHarness {
             log("agents: listening \(model.agents.isListening)")
         case "agentsoff":
             model.settings.agentsEnabled = false
+        case "order":
+            let parts = argument.split(separator: ",").map(String.init)
+            let orders: [String: ListOrder] = ["manual": .manual, "az": .nameAscending, "za": .nameDescending]
+            guard parts.count == 2, let order = orders[parts[1]] else { return log("order: bad arguments") }
+            if parts[0] == "collections" { model.settings.collectionOrder = order } else { model.settings.environmentOrder = order }
+        case "sidebarorder":
+            log("collections: \(model.shownCollections.map(\.name).joined(separator: " | "))")
+            log("environments: \(model.shownEnvironments.map(\.name).joined(separator: " | "))")
+        case "dropcollection", "dropenvironment":
+            let names = argument.split(separator: ">").map(String.init)
+            guard names.count == 2 else { return log("\(command): bad arguments") }
+            if command == "dropcollection" {
+                let all = model.workspace.collections
+                guard let dragged = all.first(where: { $0.name == names[0] }), let target = all.first(where: { $0.name == names[1] })
+                else { return log("dropcollection: no such collection") }
+                model.moveCollection(dragged.id, toPlaceOf: target.id)
+            } else {
+                let all = model.workspace.environments
+                guard let dragged = all.first(where: { $0.name == names[0] }), let target = all.first(where: { $0.name == names[1] })
+                else { return log("dropenvironment: no such environment") }
+                model.moveEnvironment(dragged.id, toPlaceOf: target.id)
+            }
+        case "dragbegin", "draghover", "dragdrop":
+            // As the sidebar's rows call the shell state during a drag.
+            let parts = argument.split(separator: ",", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return log("\(command): bad arguments") }
+            let list: ShellState.Picked.List = parts[0] == "collections" ? .collections : .environments
+            let shown = list == .collections ? model.shownCollections.map { ($0.id, $0.name) } : model.shownEnvironments.map { ($0.id, $0.name) }
+            guard let id = parts[1] == "end" ? shown.last?.0 : shown.first(where: { $0.1 == parts[1] })?.0 else {
+                return log("\(command): nothing named \(parts[1])")
+            }
+            let shell = ShellState.shared
+            switch command {
+            case "dragbegin":
+                shell.pickUp(list, id, watchingMouse: false)
+            case "draghover":
+                shell.hover(list, over: id, isOver: true, order: shown.map(\.0)) { SidebarView.lastRow(of: $0, model: model) }
+                let names = model.workspace.collections.flatMap(\.allRequests).map { ($0.id, $0.name) }
+                    + model.workspace.collections.map { ($0.id, $0.name) } + model.workspace.environments.map { ($0.id, $0.name) }
+                log("landing: \(shell.landing.map { landing in "\(landing.isBelow ? "below" : "above") \(names.first { $0.0 == landing.row }?.1 ?? "?")" } ?? "none")")
+            default:
+                log("drop: \(shell.drop(list, on: id, in: model))")
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+        case "dragcancel":
+            ShellState.shared.putDown()
+        case "movecollection", "moveenvironment":
+            let parts = argument.split(separator: ",").map(String.init)
+            guard parts.count == 2 else { return log("\(command): bad arguments") }
+            let step = parts[1] == "up" ? -1 : 1
+            if command == "movecollection", let found = model.workspace.collections.first(where: { $0.name == parts[0] }) {
+                model.moveCollection(found.id, by: step)
+            } else if let found = model.workspace.environments.first(where: { $0.name == parts[0] }) {
+                model.moveEnvironment(found.id, by: step)
+            }
         case "agentwait":
             let deadline = Date().addingTimeInterval(15)
             while model.agents.question == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }

@@ -167,7 +167,7 @@ struct RequestLineView: View {
             }
             if session.collectionID == nil, !model.workspace.collections.isEmpty {
                 Menu("Keep in collection") {
-                    ForEach(model.workspace.collections) { collection in
+                    ForEach(model.shownCollections) { collection in
                         Button(collection.name) {
                             model.moveNode(session.id, toCollection: collection.id, folder: nil)
                         }

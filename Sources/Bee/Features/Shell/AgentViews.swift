@@ -86,7 +86,7 @@ struct AgentSettingsSection: View {
                         if model.workspace.collections.isEmpty {
                             Text("No collection yet").foregroundStyle(Theme.inkSecondary)
                         }
-                        ForEach(model.workspace.collections) { collection in
+                        ForEach(model.shownCollections) { collection in
                             Toggle(collection.name, isOn: isOpen(collection.id))
                         }
                     }

@@ -271,6 +271,9 @@ public struct AppSettings: Hashable, Sendable, Codable {
     public var agentCollections: [UUID]
     /// The programs the person allowed to connect, by path.
     public var agentPrograms: [String]
+    /// How the sidebar orders the collections and the environments.
+    public var collectionOrder: ListOrder
+    public var environmentOrder: ListOrder
 
     public init(
         timeout: TimeInterval = 30, followRedirects: Bool = true, verifyTLS: Bool = true,
@@ -278,7 +281,7 @@ public struct AppSettings: Hashable, Sendable, Codable {
         responseLayout: ResponseLayout = .beside, lastRunVersion: String? = nil,
         checksForUpdates: Bool = true, lastUpdateCheck: Date? = nil, collectionsFolder: String? = nil,
         agentsEnabled: Bool = false, agentAccess: AgentAccess = .read, agentCollections: [UUID] = [],
-        agentPrograms: [String] = []
+        agentPrograms: [String] = [], collectionOrder: ListOrder = .manual, environmentOrder: ListOrder = .manual
     ) {
         self.timeout = timeout
         self.followRedirects = followRedirects
@@ -294,12 +297,15 @@ public struct AppSettings: Hashable, Sendable, Codable {
         self.agentAccess = agentAccess
         self.agentCollections = agentCollections
         self.agentPrograms = agentPrograms
+        self.collectionOrder = collectionOrder
+        self.environmentOrder = environmentOrder
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeout, followRedirects, verifyTLS, requireAuthenticationToReveal, historyLimit, responseLayout
         case lastRunVersion, checksForUpdates, lastUpdateCheck, collectionsFolder
         case agentsEnabled, agentAccess, agentCollections, agentPrograms
+        case collectionOrder, environmentOrder
     }
 
     public init(from decoder: Decoder) throws {
@@ -320,6 +326,9 @@ public struct AppSettings: Hashable, Sendable, Codable {
         agentAccess = (try? container.decodeIfPresent(AgentAccess.self, forKey: .agentAccess)) ?? .read
         agentCollections = try container.decodeIfPresent([UUID].self, forKey: .agentCollections) ?? []
         agentPrograms = try container.decodeIfPresent([String].self, forKey: .agentPrograms) ?? []
+        // An order a later version adds reads as the one the person arranged.
+        collectionOrder = (try? container.decodeIfPresent(ListOrder.self, forKey: .collectionOrder)) ?? .manual
+        environmentOrder = (try? container.decodeIfPresent(ListOrder.self, forKey: .environmentOrder)) ?? .manual
     }
 }
 
